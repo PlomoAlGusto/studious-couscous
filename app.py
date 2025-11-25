@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v13.6 Chronos", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v13.7 Chronos", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -70,10 +70,6 @@ st.markdown("""
         background-color: #1E1E1E; border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 20px;
         display: flex; justify-content: space-around; align-items: center;
     }
-    .stat-item { text-align: center; }
-    .stat-label { font-size: 12px; color: #888; text-transform: uppercase; }
-    .stat-value { font-size: 22px; font-weight: bold; color: white; }
-    .stat-sub { font-size: 11px; color: #666; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -103,7 +99,7 @@ def get_market_sessions():
         st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{status_icon}</span></div>", unsafe_allow_html=True)
 
 with st.sidebar:
-    st.title("🦁 QUIMERA v13.6")
+    st.title("🦁 QUIMERA v13.7")
     st.caption("Chronos Edition ⏳")
     get_market_sessions()
     st.divider()
@@ -419,8 +415,24 @@ if df is not None:
         setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'dir': emoji, 'status': setup_type, 'qty': qty}
 
     if signal != "NEUTRO" and signal != st.session_state.last_alert and setup:
-        msg = f"🦁 *QUIMERA SIGNAL: {signal}*\nActivo: {symbol}\nProb: {prob:.1f}%\n🔥 *OPERACIÓN: {setup['dir']}*"
-        send_telegram_msg(msg); st.session_state.last_alert = signal
+        # MENSAJE DETALLADO DE TELEGRAM RESTAURADO
+        msg = f"""🦁 *QUIMERA SIGNAL DETECTED* 🦁
+
+📉 *ACTIVO:* {symbol}
+🚀 *DIRECCIÓN:* {setup['dir']}
+📊 *PROBABILIDAD:* {prob:.1f}%
+
+🔵 *ENTRADA:* ${setup['entry']:.2f}
+🛑 *STOP LOSS:* ${setup['sl']:.2f}
+
+🎯 *TP 1:* ${setup['tp1']:.2f}
+🎯 *TP 2:* ${setup['tp2']:.2f}
+🚀 *TP 3:* ${setup['tp3']:.2f}
+
+⚖️ *LOTE:* {setup['qty']:.4f}
+"""
+        send_telegram_msg(msg)
+        st.session_state.last_alert = signal
     elif signal == "NEUTRO": st.session_state.last_alert = "NEUTRO"
     
     manage_open_positions(current_price, cur_high, cur_low)
@@ -442,7 +454,7 @@ if df is not None:
             else: st.info("Sin noticias recientes.")
         
         with col_tech:
-            # FIX: Use rgba(0,0,0,0) for transparency instead of hex
+            # FIX: rgba(0,0,0,0) for transparency
             fig_thermo = go.Figure(go.Indicator(
                 mode = "gauge+number", value = thermo_score, domain = {'x': [0, 1], 'y': [0, 1]},
                 title = {'text': "<span style='font-size:16px'>Bot Sentiment</span>"},
@@ -451,11 +463,9 @@ if df is not None:
             ))
             fig_thermo.update_layout(height=200, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
             st.plotly_chart(fig_thermo, use_container_width=True)
-            # INDICADORES ACTIVOS DEBAJO DEL GAUGE
             st.markdown(f"<div style='text-align:center'>{' '.join(details_list)}</div>", unsafe_allow_html=True)
 
         with col_fng:
-            # FIX: Use rgba(0,0,0,0) for transparency instead of hex
             fig_fng = go.Figure(go.Indicator(
                 mode = "gauge+number", value = fng_val, domain = {'x': [0, 1], 'y': [0, 1]},
                 title = {'text': "<span style='font-size:16px'>Fear & Greed</span>"},
@@ -471,19 +481,15 @@ if df is not None:
         c1.metric("Precio", f"${current_price:,.2f}")
         c2.metric("Tendencia 4H", trend_4h, delta="Bullish" if trend_4h=="BULLISH" else "Bearish")
         
-        # Métrica 3: ADR/GASOLINA
         gas_state = "Neutro"
         if mfi_val > 60: gas_state = "Lleno"
         elif mfi_val < 40: gas_state = "Reserva"
         c3.metric("ADR/GASOLINA", f"{mfi_val:.0f}", gas_state)
         
-        # Métrica 4: FUERZA ADX
         adx_state = "Fuerte" if adx_val > 25 else "Débil"
         c4.metric("FUERZA (ADX)", f"{adx_val:.1f}", adx_state)
 
-        # ----------------------------------------------------------------
-        # WIDGET DE ESTADÍSTICAS PAPER TRADING (ENCIMA DE TABS)
-        # ----------------------------------------------------------------
+        # WIDGET DE ESTADÍSTICAS PAPER TRADING
         st.markdown("### 📊 RASTREADOR DE RENDIMIENTO (Paper Trading)")
         df_stats = load_trades()
         total_pnl_val = 0.0
