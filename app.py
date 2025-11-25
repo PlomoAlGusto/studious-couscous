@@ -16,12 +16,10 @@ import feedparser
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="Quimera Pro v16.1 Fixed Deriv", layout="wide", page_icon="🦁")
-
 st.markdown("""
 <style>
     /* Estilos Generales */
     .metric-card {background-color: #262730; padding: 10px; border-radius: 8px; border: 1px solid #444;}
-    
     /* Estilos Trade Setup */
     .trade-setup {
         background-color: #151515; padding: 20px; border-radius: 15px; border: 1px solid #444;
@@ -32,7 +30,6 @@ st.markdown("""
     .sl-red { color: #FF4444; font-weight: bold; font-size: 18px; }
     .entry-blue { color: #44AAFF; font-weight: bold; font-size: 18px; }
     .label-mini { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px;}
-    
     /* Estilos QUIMERA COPILOT (AI BOX) - FUENTE MEJORADA */
     .ai-box {
         background-color: #0e1117;
@@ -58,14 +55,11 @@ st.markdown("""
         /* Fuente Sans-Serif para el título para contraste */
         font-family: 'Segoe UI', 'Roboto', sans-serif;
     }
-    
     /* Relojes de Mercado */
     .market-clock { font-size: 12px; padding: 5px; margin-bottom: 5px; border-radius: 4px; display: flex; justify-content: space-between;}
     .clock-open { background-color: rgba(0, 255, 0, 0.2); border: 1px solid #00FF00; }
     .clock-closed { background-color: rgba(255, 0, 0, 0.1); border: 1px solid #555; color: #888; }
-    
     .status-dot-on { color: #00FF00; font-weight: bold; text-shadow: 0 0 5px #00FF00; }
-    
     /* Badges */
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
@@ -82,11 +76,13 @@ if not os.path.exists(CSV_FILE):
     df_empty = pd.DataFrame(columns=COLUMNS_DB)
     df_empty.to_csv(CSV_FILE, index=False)
 
-if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
+if 'last_alert' not in st.session_state:
+    st.session_state.last_alert = "NEUTRO"
 
 # -----------------------------------------------------------------------------
 # 2. MOTOR DE DATOS (CCXT POWERED)
 # -----------------------------------------------------------------------------
+
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=COLUMNS_DB)
     try:
@@ -94,7 +90,7 @@ def load_trades():
         if 'leverage' not in df.columns: df['leverage'] = 1.0
         return df
     except: return pd.DataFrame(columns=COLUMNS_DB)
-        
+
 def get_fear_and_greed():
     try:
         url = "https://api.alternative.me/fng/?limit=1"
@@ -133,68 +129,85 @@ def get_market_sessions():
 
 @st.cache_data(ttl=60)
 def get_deriv_data(symbol):
-    api_symbol_binance = symbol.replace('/', '')
-    api_symbol_okx = f"{symbol.replace('/', '-')}-SWAP"
-    api_symbol_dydx = symbol.replace('/', '-')
     base = symbol.split('/')[0]
-
+    quote = symbol.split('/')[1]
     COINGLASS_API_KEY = st.secrets.get("COINGLASS_API_KEY", None)
+    
+    # Headers genéricos para evitar bloqueos
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (compatible; QuimeraPro/1.0; +https://quimerapro.ai)'
+    }
 
-    # 1. Binance
+    # 1. OKX — Fuente PRINCIPAL (accesible desde USA)
     try:
-        r_fr = requests.get(f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={api_symbol_binance}&limit=1", timeout=6).json()
-        r_oi = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={api_symbol_binance}", timeout=6).json()
-        fr = float(r_fr[0]['fundingRate']) * 100 if r_fr else None
-        oi = float(r_oi.get('openInterest', 0)) if r_oi else None
-        if fr is not None and oi is not None and oi > 0:
-            return fr, oi, "Binance"
-    except: pass
-
-    # 2. Bybit
-    try:
-        r_fr = requests.get(f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={api_symbol_binance}&limit=1", timeout=6).json()
-        r_oi = requests.get(f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={api_symbol_binance}", timeout=6).json()
-        fr = float(r_fr['result']['list'][0]['fundingRate']) * 100 if r_fr.get('retCode') == 0 and r_fr['result']['list'] else None
-        oi = float(r_oi['result']['list'][0]['openInterest']) if r_oi.get('retCode') == 0 and r_oi['result']['list'] else None
-        if fr is not None and oi is not None and oi > 0:
-            return fr, oi, "Bybit"
-    except: pass
-
-    # 3. CoinGlass (si tienes key)
-    if COINGLASS_API_KEY:
-        try:
-            headers = {"coinglassSecret": COINGLASS_API_KEY}
-            r_fr = requests.get(f"https://open-api.coinglass.com/public/v2/funding?symbol={base}", headers=headers, timeout=6).json()
-            r_oi = requests.get(f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base}", headers=headers, timeout=6).json()
-            fr_list = [ex['uMarginList'][0]['rate'] * 100 for ex in r_fr.get('data', []) if ex.get('uMarginList')]
-            oi_total = sum(ex.get('openInterestAmount', 0) * ex.get('price', 1) for ex in r_oi.get('data', []))
-            fr = np.mean(fr_list) if fr_list else None
-            if fr is not None and oi_total > 0:
-                return fr, oi_total, "CoinGlass"
-        except: pass
-
-    # 4. OKX — LA QUE NUNCA FALLA
-    try:
-        inst = f"{symbol.split('/')[0]}-{symbol.split('/')[1]}-SWAP"
-        r_fr = requests.get(f"https://www.okx.com/api/v5/public/funding-rate?instId={inst}", timeout=6).json()
-        r_oi = requests.get(f"https://www.okx.com/api/v5/public/open-interest?instId={inst}", timeout=6).json()
-        if r_fr['code'] == '0' and r_fr['data']:
+        inst = f"{base}-{quote}-SWAP"
+        r_fr = requests.get(f"https://www.okx.com/api/v5/public/funding-rate?instId={inst}", timeout=6, headers=headers).json()
+        r_oi = requests.get(f"https://www.okx.com/api/v5/public/open-interest?instId={inst}", timeout=6, headers=headers).json()
+        if r_fr.get('code') == '0' and r_fr['data']:
             fr = float(r_fr['data'][0]['fundingRate']) * 100
-        if r_oi['code'] == '0' and r_oi['data']:
+        else:
+            fr = None
+        if r_oi.get('code') == '0' and r_oi['data']:
             oi = float(r_oi['data'][0]['openInterest'])
+        else:
+            oi = None
         if fr is not None and oi is not None:
             return fr, oi, "OKX"
-    except: pass
+    except Exception as e:
+        print(f"OKX error: {e}")
+        pass
 
-    # 5. dYdX (solo FR como último recurso)
+    # 2. Bybit — Fuente secundaria (no bloqueada en USA)
     try:
-        r = requests.get(f"https://indexer.dydx.exchange/v4/historicalFunding/{api_symbol_dydx}?limit=1", timeout=6).json()
+        inst = symbol.replace('/', '')
+        r_fr = requests.get(f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={inst}&limit=1", timeout=6, headers=headers).json()
+        r_oi = requests.get(f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={inst}&period=5min", timeout=6, headers=headers).json()
+        fr = float(r_fr['result']['list'][0]['fundingRate']) * 100 if r_fr.get('retCode') == 0 and r_fr.get('result', {}).get('list') else None
+        oi = float(r_oi['result']['list'][0]['openInterest']) if r_oi.get('retCode') == 0 and r_oi.get('result', {}).get('list') else None
+        if fr is not None and oi is not None:
+            return fr, oi, "Bybit"
+    except Exception as e:
+        print(f"Bybit error: {e}")
+        pass
+
+    # 3. CoinGlass (si tienes API key)
+    if COINGLASS_API_KEY:
+        try:
+            coinglass_headers = {
+                "coinglassSecret": COINGLASS_API_KEY,
+                "User-Agent": "QuimeraPro"
+            }
+            r_fr = requests.get(f"https://open-api.coinglass.com/public/v2/funding?symbol={base}", headers=coinglass_headers, timeout=6).json()
+            r_oi = requests.get(f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base}", headers=coinglass_headers, timeout=6).json()
+            fr_list = []
+            if r_fr.get('code') == 200 and r_fr.get('data'):
+                for ex in r_fr['data']:
+                    if ex.get('uMarginList') and len(ex['uMarginList']) > 0:
+                        fr_list.append(float(ex['uMarginList'][0]['rate']) * 100)
+            fr = np.mean(fr_list) if fr_list else None
+            oi_total = 0
+            if r_oi.get('code') == 200 and r_oi.get('data'):
+                for ex in r_oi['data']:
+                    oi_total += float(ex.get('openInterestAmount', 0)) * float(ex.get('price', 1))
+            if fr is not None and oi_total > 0:
+                return fr, oi_total, "CoinGlass"
+        except Exception as e:
+            print(f"CoinGlass error: {e}")
+            pass
+
+    # 4. dYdX (solo FR como último recurso)
+    try:
+        symbol_dydx = f"{base}-{quote}" if quote == "USD" else base
+        r = requests.get(f"https://indexer.dydx.exchange/v4/historicalFunding/{symbol_dydx}?limit=1", timeout=6, headers=headers).json()
         if r and 'historicalFunding' in r and r['historicalFunding']:
             fr = float(r['historicalFunding'][0]['rate']) * 100
-            return fr, 0, "dYdX (solo FR)"
-    except: pass
+            return fr, 0, "dYdX (FR only)"
+    except Exception as e:
+        print(f"dYdX error: {e}")
+        pass
 
     return None, None, "OFFLINE"
+
 @st.cache_data(ttl=30)
 def get_mtf_trends_analysis(symbol):
     ex = ccxt.binance()
@@ -215,6 +228,7 @@ def get_mtf_trends_analysis(symbol):
 # -----------------------------------------------------------------------------
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
+
 with st.sidebar:
     st.title("🦁 QUIMERA v16.1")
     st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
@@ -222,29 +236,24 @@ with st.sidebar:
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
-    
     with st.expander("🛡️ FILTROS & CORE", expanded=True):
         use_ema = st.checkbox("Tendencia Base (EMAs)", True)
         use_mtf = st.checkbox("Filtro Macro (4H Trend)", True)
         use_vwap = st.checkbox("Filtro VWAP (Institucional)", True)
         use_ichi = st.checkbox("Filtro Nube Ichimoku", False)
         use_regime = st.checkbox("Filtro Anti-Rango (ADX)", True)
-    
     with st.expander("🌊 MOMENTO Y VOLUMEN"):
         use_rsi = st.checkbox("RSI & Stoch", True)
         use_obi = st.checkbox("Order Book Imbalance", True)
         use_tsi = st.checkbox("TSI (True Strength)", True)
-        
     with st.expander("💰 GESTIÓN DE RIESGO"):
         current_balance = get_current_balance()
         st.metric("Balance Disponible", f"${current_balance:,.2f}", delta=f"{current_balance-INITIAL_CAPITAL:.2f}")
         risk_per_trade = st.slider("Riesgo por Trade (%)", 0.5, 5.0, 1.0)
-        
     with st.expander("⚙️ SALIDAS"):
         use_trailing = st.checkbox("Trailing Stop", True)
         use_breakeven = st.checkbox("Breakeven (+1.5%)", True)
         use_time_stop = st.checkbox("Time Stop (12 Velas)", True)
-    
     # NUEVO: Debug para Deriv Data
     with st.expander("🔍 DEBUG DERIVADOS", expanded=False):
         if 'fr_debug' in locals():
@@ -253,13 +262,13 @@ with st.sidebar:
             st.write(f"**Source:** {src_debug}")
         else:
             st.info("Ejecuta la app para ver datos.")
-        
     auto_refresh = st.checkbox("🔄 AUTO-SCAN (60s)", False)
     if st.button("🔥 RESETEAR CUENTA"): reset_account()
 
 # -----------------------------------------------------------------------------
 # 4. CAPA DE DATOS
 # -----------------------------------------------------------------------------
+
 def init_exchange():
     try:
         if "BINANCE_API_KEY" in st.secrets:
@@ -288,7 +297,6 @@ def get_mtf_data(symbol, tf_lower):
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     except: return None, 0, None
-
     trend_4h = "NEUTRO"
     try:
         ohlcv_4h = exchange.fetch_ohlcv(ticker_fix, '4h', limit=50)
@@ -297,7 +305,6 @@ def get_mtf_data(symbol, tf_lower):
         last_4h = df_4h.iloc[-1]
         trend_4h = "BULLISH" if last_4h['close'] > last_4h['EMA_50'] else "BEARISH"
     except: pass
-
     obi = 0
     try:
         book = exchange.fetch_order_book(ticker_fix, limit=20)
@@ -315,7 +322,6 @@ def calculate_indicators(df):
         vp = ((df['high'] + df['low'] + df['close'])/3) * df['volume']
         df['VWAP'] = vp.cumsum() / df['volume'].cumsum()
     except: df['VWAP'] = df['EMA_50']
-    
     ichi = ta.ichimoku(df['high'], df['low'], df['close'])[0]
     df = pd.concat([df, ichi], axis=1)
     df['RSI'] = ta.rsi(df['close'], length=14)
@@ -323,14 +329,12 @@ def calculate_indicators(df):
     adx = ta.adx(df['high'], df['low'], df['close'], length=14)
     df = pd.concat([df, adx], axis=1)
     df['MFI'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
-    
     try:
         tsi = ta.tsi(df['close'], fast=13, slow=25)
         df = pd.concat([df, tsi], axis=1)
         tsi_col = [c for c in df.columns if 'TSI' in c][0]
         df['TSI'] = df[tsi_col]
     except: df['TSI'] = 0
-    
     high_w, low_w, close_w = df['high'].rolling(20).max(), df['low'].rolling(20).min(), df['close']
     df['PIVOT'] = (high_w + low_w + close_w) / 3
     df['R1'], df['S1'] = (2 * df['PIVOT']) - low_w, (2 * df['PIVOT']) - high_w
@@ -339,18 +343,17 @@ def calculate_indicators(df):
 # -----------------------------------------------------------------------------
 # 5. IA ANALISTA (SYSTEM LOGIC, NOT AI)
 # -----------------------------------------------------------------------------
+
 def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src):
     # 1. CONTEXTO MULTI-TIMEFRAME
     t_15m = mtf_trends.get('15m', 'NEUTRO')
     t_1h = mtf_trends.get('1h', 'NEUTRO')
     t_4h = mtf_trends.get('4h', 'NEUTRO')
-    
     if mtf_score == 3: context = "<span style='color:#00FF00'>ALCISTA FUERTE</span> (Alineación Total)"
     elif mtf_score == -3: context = "<span style='color:#FF4444'>BAJISTA FUERTE</span> (Alineación Total)"
     elif t_4h == "BULL" and t_15m == "BEAR": context = "<span style='color:#FFFF00'>CORRECCIÓN EN CURSO</span> (Macro Alcista / Micro Bajista)"
     elif t_4h == "BEAR" and t_15m == "BULL": context = "<span style='color:#FFFF00'>REBOTE TÉCNICO</span> (Macro Bajista / Micro Alcista)"
     else: context = "MERCADO MIXTO (Conflicto de Temporalidades)"
-    
     # 2. DATOS DERIVADOS (Manejo de N/A)
     if fr is None or open_interest is None:
         deriv_txt = "<span style='color:#FFFF00'>Fuentes Derivadas OFFLINE (Verifica conexión/API key)</span>"
@@ -364,30 +367,22 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
         elif fr < -0.01: squeeze_risk = " (Short Squeeze Risk)"
         else: squeeze_risk = " (Saludable)"
         deriv_txt += squeeze_risk
-        
         if open_interest > 1000000000: oi_fmt = f"${open_interest/1000000000:.2f}B"
         elif open_interest > 1000000: oi_fmt = f"${open_interest/1000000:.2f}M"
         else: oi_fmt = f"${open_interest:,.0f}"
-        
         oi_txt = f"Interés Abierto: <b style='color:#44AAFF'>{oi_fmt}</b>"
-
     # 3. MOMENTO (TSI / MFI / ADX)
     mfi = row['MFI']
     adx = row['ADX_14']
     tsi = row['TSI']
-    
     gas_status = "LLENO" if mfi > 60 else "RESERVA" if mfi < 40 else "MEDIO"
     gas_color = "#00FF00" if mfi > 60 else "#FF4444" if mfi < 40 else "#FFF"
-    
     tsi_status = "ALCISTA" if tsi > 0 else "BAJISTA"
     tsi_color = "#00FF00" if tsi > 0 else "#FF4444"
-    
     mom_txt = f"Gasolina (MFI): <b style='color:{gas_color}'>{gas_status}</b>. ADX: {adx:.1f}. TSI: <b style='color:{tsi_color}'>{tsi_status}</b> ({tsi:.2f})."
-
     pressure = "COMPRADORA" if obi > 0.05 else "VENDEDORA" if obi < -0.05 else "NEUTRA"
     obi_color = "#00FF00" if obi > 0.05 else "#FF4444" if obi < -0.05 else "#aaa"
     obi_txt = f"Presión Libro: <b style='color:{obi_color}'>{pressure}</b> ({obi*100:.1f}%)"
-
     html = f"""
     <div class='ai-box'>
         <span class='ai-title'>🤖 QUIMERA COPILOT (Data Source: {data_src}):</span>
@@ -402,60 +397,50 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
 def run_strategy(df, obi, trend_4h, filters, fr):
     row = df.iloc[-1]
     score, max_score, details = 0, 0, []
-    
     if filters['use_mtf']:
         max_score += 2
         if trend_4h == "BULLISH": score += 2; details.append("<span class='badge-bull'>MACRO</span>")
         elif trend_4h == "BEARISH": score -= 2; details.append("<span class='badge-bear'>MACRO</span>")
         else: details.append("<span class='badge-neutral'>MACRO</span>")
-
     if filters['use_ema']: 
         max_score += 1
         if row['EMA_20'] > row['EMA_50']: score += 1; details.append("<span class='badge-bull'>EMA</span>")
         else: score -= 1; details.append("<span class='badge-bear'>EMA</span>")
-
     if filters['use_vwap']:
         max_score += 1
         if row['close'] > row['VWAP']: score += 1; details.append("<span class='badge-bull'>VWAP</span>")
         else: score -= 1; details.append("<span class='badge-bear'>VWAP</span>")
-        
     if filters['use_obi']:
         max_score += 1
         if obi > 0.05: score += 1; details.append("<span class='badge-bull'>OBI</span>")
         elif obi < -0.05: score -= 1; details.append("<span class='badge-bear'>OBI</span>")
         else: details.append("<span class='badge-neutral'>OBI</span>")
-    
     if filters.get('use_tsi', False): 
         max_score += 1
         if row['TSI'] > 0: score += 1; details.append("<span class='badge-bull'>TSI</span>")
         else: score -= 1; details.append("<span class='badge-bear'>TSI</span>")
-    
     threshold = max_score * 0.4
     signal = "NEUTRO"
     if score > threshold: signal = "LONG"
     elif score < -threshold: signal = "SHORT"
-    
     if filters['use_regime'] and row['ADX_14'] < 20: signal = "NEUTRO"
-        
     if filters['use_rsi']:
         if row['RSI'] > 70 and signal == "LONG": signal = "NEUTRO"
         if row['RSI'] < 30 and signal == "SHORT": signal = "NEUTRO"
-
     prob = 50.0
     if max_score > 0: prob = 50 + ((abs(score)/max_score)*45)
     thermo_score = (score / max_score) * 100 if max_score > 0 else 0
-    
     # Filtro con FR para precisión
     if fr is not None:
         if signal == "LONG" and fr > 0.01: signal = "NEUTRO"
         elif signal == "SHORT" and fr < -0.01: signal = "NEUTRO"
         prob += 5 if abs(fr) < 0.005 else -5  # Ajusta prob con FR saludable
-    
     return signal, row['ATR'], prob, thermo_score, details
 
 # -----------------------------------------------------------------------------
 # 6. EJECUCIÓN
 # -----------------------------------------------------------------------------
+
 def save_trades(df): df.to_csv(CSV_FILE, index=False)
 
 def execute_trade(type, entry, sl, tp1, tp2, tp3, size, atr, leverage):
@@ -487,12 +472,10 @@ def manage_open_positions(current_price, current_high, current_low):
             if use_breakeven and current_low <= row['tp1'] and row['sl'] > row['entry']: df.at[idx, 'sl'] = row['entry'] * 0.999 
             if current_low <= row['tp3']: close_reason, pnl = "TP3 (Final) 🚀", (row['entry'] - row['tp3']) * row['size']
             elif current_high >= row['sl']: close_reason, pnl = "SL 🛑", (row['entry'] - row['sl']) * row['size']
-
         if not close_reason and use_time_stop:
             df.at[idx, 'candles_held'] += 1
             current_pnl_calc = (current_price - row['entry']) * row['size'] if row['type'] == "LONG" else (row['entry'] - current_price) * row['size']
             if df.at[idx, 'candles_held'] > 12 and current_pnl_calc < 0: close_reason, pnl = "Time Stop ⏳", current_pnl_calc
-
         if close_reason:
             df.at[idx, 'status'] = "CLOSED"; df.at[idx, 'pnl'] = pnl; df.at[idx, 'reason'] = close_reason
             send_telegram_msg(f"💰 CIERRE {symbol}: {close_reason}\nPnL: ${pnl:.2f}")
@@ -527,49 +510,39 @@ def render_analytics(df_trades):
 # -----------------------------------------------------------------------------
 # 7. DASHBOARD PRINCIPAL
 # -----------------------------------------------------------------------------
-df, obi, trend_4h = get_mtf_data(symbol, tf)
 
+df, obi, trend_4h = get_mtf_data(symbol, tf)
 if df is not None:
     df = calculate_indicators(df)
     filters = {'use_mtf': use_mtf, 'use_ema': use_ema, 'use_vwap': use_vwap, 'use_ichi': use_ichi, 'use_regime': use_regime, 'use_rsi': use_rsi, 'use_obi': use_obi, 'use_tsi': use_tsi}
     fr, open_interest, data_src = get_deriv_data(symbol)
-    
     # DEBUG GLOBAL (para sidebar)
     fr_debug, oi_debug, src_debug = fr, open_interest, data_src
-    
     signal, atr, prob, thermo_score, details_list = run_strategy(df, obi, trend_4h, filters, fr)
     current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
     mfi_val, adx_val = df['MFI'].iloc[-1], df['ADX_14'].iloc[-1]
-    
     # DATOS FIX
     fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
     mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
-    
     # IA
     ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest, data_src)
-    
     setup = None
     calc_dir = signal 
     setup_type = "CONFIRMED" if signal != "NEUTRO" else "POTENTIAL"
-    
     if signal == "NEUTRO":
         if trend_4h == "BULLISH": calc_dir = "LONG"
         elif trend_4h == "BEARISH": calc_dir = "SHORT"
         else: calc_dir = None
-
     qty, leverage = 0, 1.0
     current_balance = get_current_balance()
-    
     if calc_dir:
         sl_dist = atr * 1.5
         risk = sl_dist
         risk_amount = current_balance * (risk_per_trade / 100)
         qty = risk_amount / risk if risk > 0 else 0
-        
         notional_value = qty * current_price
         leverage = max(1.0, notional_value / current_balance)
-
         if calc_dir == "LONG":
             sl, tp1, tp2, tp3 = current_price-sl_dist, current_price+risk, current_price+(risk*2), current_price+(risk*3.5)
             emoji = "⬆️ LONG"
@@ -577,7 +550,6 @@ if df is not None:
             sl, tp1, tp2, tp3 = current_price+sl_dist, current_price-risk, current_price-(risk*2), current_price-(risk*3.5)
             emoji = "⬇️ SHORT"
         setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'dir': emoji, 'status': setup_type, 'qty': qty, 'lev': leverage}
-
     if signal != "NEUTRO" and signal != st.session_state.last_alert and setup:
         msg = f"""🦁 *QUIMERA SIGNAL*
 📉 {symbol} | {setup['dir']}
@@ -589,11 +561,8 @@ if df is not None:
         send_telegram_msg(msg)
         st.session_state.last_alert = signal
     elif signal == "NEUTRO": st.session_state.last_alert = "NEUTRO"
-    
     manage_open_positions(current_price, cur_high, cur_low)
-    
     tab1, tab2 = st.tabs(["📊 LIVE COMMAND", "🧪 PAPER TRADING"])
-    
     with tab1:
         col_news, col_tech, col_fng = st.columns([1.5, 1, 1])
         with col_news:
@@ -607,7 +576,6 @@ if df is not None:
                 news_html += "</div>"
                 st.markdown(news_html, unsafe_allow_html=True)
             else: st.info("Sin noticias recientes.")
-        
         with col_tech:
             fig_thermo = go.Figure(go.Indicator(
                 mode = "gauge+number", value = thermo_score, domain = {'x': [0, 1], 'y': [0, 1]},
@@ -618,7 +586,6 @@ if df is not None:
             fig_thermo.update_layout(height=200, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
             st.plotly_chart(fig_thermo, use_container_width=True)
             st.markdown(f"<div style='text-align:center'>{' '.join(details_list)}</div>", unsafe_allow_html=True)
-
         with col_fng:
             fig_fng = go.Figure(go.Indicator(
                 mode = "gauge+number", value = fng_val, domain = {'x': [0, 1], 'y': [0, 1]},
@@ -628,26 +595,21 @@ if df is not None:
             ))
             fig_fng.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
             st.plotly_chart(fig_fng, use_container_width=True)
-
         # HTML IA
         st.markdown(ai_html, unsafe_allow_html=True)
-        
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Precio", f"${current_price:,.2f}")
-        
         # WIDGETS
         if fr is None:
             c2.metric("Funding Rate", "N/A", delta="OFFLINE")
         else:
             c2.metric("Funding Rate", f"{fr:.4f}%", delta=f"{fr:.4f}" if fr > 0 else f"{fr:.4f}", delta_color="inverse")
-        
         # Formateo Open Interest
         if open_interest is None:
             c3.metric("Open Interest", "N/A")
         else:
             oi_show = f"${open_interest/1e9:.2f}B" if open_interest > 1e9 else f"${open_interest/1e6:.2f}M"
             c3.metric("Open Interest", oi_show)
-        
         # MTF
         with c4:
             cols = st.columns(3)
@@ -655,14 +617,12 @@ if df is not None:
             cols[0].markdown(f"<div style='text-align:center; font-size:10px'>15m<br><span style='font-size:14px'>{colors[mtf_trends['15m']]}</span></div>", unsafe_allow_html=True)
             cols[1].markdown(f"<div style='text-align:center; font-size:10px'>1h<br><span style='font-size:14px'>{colors[mtf_trends['1h']]}</span></div>", unsafe_allow_html=True)
             cols[2].markdown(f"<div style='text-align:center; font-size:10px'>4h<br><span style='font-size:14px'>{colors[mtf_trends['4h']]}</span></div>", unsafe_allow_html=True)
-
         st.markdown("### 📊 RASTREADOR DE RENDIMIENTO (Paper Trading)")
         df_stats = load_trades()
         total_pnl_val = 0.0
         win_rate = 0.0
         open_count = 0
         total_closed = 0
-        
         if not df_stats.empty:
             closed_s = df_stats[df_stats['status'] == 'CLOSED']
             open_s = df_stats[df_stats['status'] == 'OPEN']
@@ -672,15 +632,12 @@ if df is not None:
                 total_pnl_val = closed_s['pnl'].sum()
                 wins = len(closed_s[closed_s['pnl'] > 0])
                 win_rate = (wins / total_closed) * 100
-        
         sc1, sc2, sc3, sc4 = st.columns(4)
         sc1.metric("PnL Total", f"${total_pnl_val:.2f}", delta_color="normal")
         sc2.metric("Win Rate", f"{win_rate:.1f}%")
         sc3.metric("Trades Cerrados", total_closed)
         sc4.metric("Trades Abiertos", open_count)
-        
         st.divider()
-
         if setup:
             prob_str = f"{prob:.1f}%"
             prob_color = "#00FF00" if prob >= 80 else "#FFFF00" if prob >= 60 else "#FF4444"
@@ -692,7 +649,6 @@ if df is not None:
                 header_cls = "header-potential"
                 header_txt = f"⚠️ POTENCIAL: {setup['dir']}"
                 btn_label = f"⚠️ FORZAR ENTRADA"
-
             html_card = f"""
 <div class="trade-setup">
     <div class="{header_cls}">{header_txt}</div>
@@ -719,7 +675,6 @@ if df is not None:
                 execute_trade(calc_dir, current_price, setup['sl'], setup['tp1'], setup['tp2'], setup['tp3'], setup['qty'], atr, setup['lev'])
                 st.success(f"Orden {calc_dir} lanzada.")
         else: st.info("Esperando estructura de mercado clara...")
-
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
         fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name=f'{source_name} Data'), row=1, col=1)
         if use_vwap: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
@@ -732,11 +687,9 @@ if df is not None:
             fig.add_hline(y=setup['sl'], line_dash="dot", line_color="red", row=1, col=1)
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['RSI'], line=dict(color='purple'), name='RSI'), row=2, col=1)
         fig.add_hline(y=70, row=2, col=1); fig.add_hline(y=30, row=2, col=1)
-        
         # Titulo dinámico
         fig.update_layout(title=f"Chart Source: {source_name}", template="plotly_dark", height=500, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
-
     with tab2:
         df_trades = load_trades()
         st.subheader("📈 Rendimiento Detallado")
@@ -756,7 +709,6 @@ if df is not None:
             def color_pnl(val): return f'color: {"#228B22" if val > 0 else "#B22222" if val < 0 else "white"}'
             if not closed_trades.empty: st.dataframe(closed_trades.style.applymap(color_pnl, subset=['pnl']).format({'leverage': '{:.1f}x'}), use_container_width=True)
         else: st.info("Historial vacío.")
-
 else: st.warning("Cargando datos...")
 
 if auto_refresh: time.sleep(60); st.rerun()
