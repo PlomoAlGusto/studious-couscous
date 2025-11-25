@@ -13,7 +13,7 @@ import numpy as np
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN DEL SISTEMA
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v5.2 Tactical", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v5.3 Clear Vision", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -26,18 +26,22 @@ st.markdown("""
     
     /* ESTILOS NUEVOS PARA LA TARJETA TÁCTICA */
     .trade-setup {
-        background-color: #1E1E1E; 
-        padding: 15px; 
-        border-radius: 10px; 
-        border: 1px solid #555;
+        background-color: #151515; 
+        padding: 20px; 
+        border-radius: 15px; 
+        border: 1px solid #444;
         margin-top: 10px;
         margin-bottom: 20px;
         text-align: center;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
     .tp-green { color: #00FF00; font-weight: bold; font-size: 18px; }
     .sl-red { color: #FF4444; font-weight: bold; font-size: 18px; }
     .entry-blue { color: #44AAFF; font-weight: bold; font-size: 18px; }
-    .label-mini { font-size: 12px; color: #aaa; }
+    .label-mini { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px;}
+    
+    .direction-header-long { color: #00FF00; font-size: 22px; font-weight: 900; margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px; }
+    .direction-header-short { color: #FF4444; font-size: 22px; font-weight: 900; margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -51,8 +55,8 @@ if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 # 2. CONFIGURACIÓN (SIDEBAR)
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA TACTICAL")
-    st.caption("v5.2 Multi-Target")
+    st.title("🦁 QUIMERA v5.3")
+    st.caption("Clear Vision Edition")
     
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe", ["15m", "1h", "4h"], index=0)
@@ -236,7 +240,7 @@ if df is not None:
     current_price = df['close'].iloc[-1]
     last_row = df.iloc[-1]
     
-    # CÁLCULO DE NIVELES TÁCTICOS (TP1, TP2, TP3)
+    # CÁLCULO DE NIVELES TÁCTICOS
     setup = None
     if signal != "NEUTRO":
         sl_dist = atr * 1.5
@@ -244,22 +248,26 @@ if df is not None:
         
         if signal == "LONG":
             sl = current_price - sl_dist
-            tp1 = current_price + risk      # Ratio 1:1
-            tp2 = current_price + (risk*2)  # Ratio 1:2
-            tp3 = current_price + (risk*3.5)# Ratio 1:3.5
+            tp1 = current_price + risk      
+            tp2 = current_price + (risk*2)  
+            tp3 = current_price + (risk*3.5)
+            direction_emoji = "⬆️ COMPRA"
         else:
             sl = current_price + sl_dist
             tp1 = current_price - risk
             tp2 = current_price - (risk*2)
             tp3 = current_price - (risk*3.5)
+            direction_emoji = "⬇️ VENTA"
             
-        setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3}
+        setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'dir': direction_emoji}
 
-    # GESTIÓN DE ALERTAS (AHORA CON TODOS LOS DATOS)
+    # GESTIÓN DE ALERTAS TELEGRAM
     if signal != "NEUTRO" and signal != st.session_state.last_alert:
         msg = f"""🦁 *QUIMERA SIGNAL: {signal}*
 Activo: {symbol}
 Probabilidad: {prob:.1f}%
+
+🔥 *OPERACIÓN: {setup['dir']}*
 
 🔵 *ENTRADA:* ${current_price:.2f}
 
@@ -294,21 +302,17 @@ Probabilidad: {prob:.1f}%
         st.subheader("🔍 Contexto")
         d1, d2, d3, d4 = st.columns(4)
         
-        # Volumen
         vol_state = "Bajo"
         if last_row['volume'] > last_row['SMA_VOL'] * 1.5: vol_state = "🔥 ALTO"
         d1.metric("Volumen", vol_state)
         
-        # Régimen
         regime = "Lateral"
         if last_row['ADX_14'] > 25: regime = "Tendencia 🚀"
         d2.metric("Régimen", regime, f"ADX: {last_row['ADX_14']:.1f}")
         
-        # Valor
         dist_vwap = ((current_price - last_row['VWAP']) / last_row['VWAP']) * 100
         d3.metric("Valor", f"{dist_vwap:.2f}%", "vs VWAP")
         
-        # OBI
         obi_txt = "Neutro"
         if obi > 0.05: obi_txt = "Toros 🐂"
         elif obi < -0.05: obi_txt = "Osos 🐻"
@@ -316,22 +320,29 @@ Probabilidad: {prob:.1f}%
 
         st.divider()
 
-        # 3. TARJETA DE ESTRATEGIA TÁCTICA (NUEVO !!!)
+        # 3. TARJETA DE ESTRATEGIA TÁCTICA (VISUAL CLARO)
         if signal != "NEUTRO" and setup:
-            st.subheader("🎯 Setup Táctico Sugerido")
+            st.subheader("🎯 Setup Táctico")
+            
+            # Definir colores y texto del encabezado según señal
+            header_class = "direction-header-long" if signal == "LONG" else "direction-header-short"
+            
             st.markdown(f"""
             <div class="trade-setup">
+                <div class="{header_class}">
+                    OPERACIÓN: {setup['dir']}
+                </div>
                 <div style="display: flex; justify-content: space-around;">
                     <div><span class="label-mini">ENTRADA</span><br><span class="entry-blue">${setup['entry']:.2f}</span></div>
                     <div><span class="label-mini">STOP LOSS</span><br><span class="sl-red">${setup['sl']:.2f}</span></div>
-                    <div><span class="label-mini">TP 1 (1:1)</span><br><span class="tp-green">${setup['tp1']:.2f}</span></div>
-                    <div><span class="label-mini">TP 2 (1:2)</span><br><span class="tp-green">${setup['tp2']:.2f}</span></div>
-                    <div><span class="label-mini">TP 3 (Moon)</span><br><span class="tp-green">${setup['tp3']:.2f}</span></div>
+                    <div><span class="label-mini">TP 1</span><br><span class="tp-green">${setup['tp1']:.2f}</span></div>
+                    <div><span class="label-mini">TP 2</span><br><span class="tp-green">${setup['tp2']:.2f}</span></div>
+                    <div><span class="label-mini">TP 3</span><br><span class="tp-green">${setup['tp3']:.2f}</span></div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
             
-            if st.button(f"🚀 EJECUTAR {signal} (TP3 Objetivo)"):
+            if st.button(f"🚀 EJECUTAR {signal} (SIMULADO)"):
                 trade = {"time": datetime.now(), "symbol": symbol, "type": signal, "entry": current_price, "sl": setup['sl'], "tp": setup['tp3'], "tp3": setup['tp3'], "size": 100, "atr_entry": atr, "status": "OPEN"}
                 st.session_state.positions.append(trade)
                 st.success("Orden enviada.")
@@ -343,7 +354,6 @@ Probabilidad: {prob:.1f}%
         fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
         if use_vwap: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
         
-        # PINTAR NIVELES SI HAY SEÑAL
         if signal != "NEUTRO":
             fig.add_hline(y=setup['tp1'], line_dash="dot", line_color="green", row=1, col=1)
             fig.add_hline(y=setup['tp2'], line_dash="dot", line_color="green", row=1, col=1)
