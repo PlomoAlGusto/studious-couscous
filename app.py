@@ -5,7 +5,6 @@ import pandas_ta as ta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
-from datetime import datetime
 import time
 import numpy as np
 import os
@@ -13,16 +12,12 @@ import os
 # =============================================================================
 # CONFIGURACIÓN
 # =============================================================================
-st.set_page_config(page_title="Quimera v16.3 - OKX 100% Functional", layout="wide", page_icon="lion_face")
+st.set_page_config(page_title="Quimera v17 - OKX 100% Functional", layout="wide", page_icon="lion_face")
 
 st.markdown("""
 <style>
     .big-font {font-size:32px !important; font-weight:bold; color:#44AAFF; text-align:center;}
     .metric-card {background:#1e1e1e; padding:15px; border-radius:12px; border:1px solid #444; text-align:center;}
-    .trade-setup {background:#151515; padding:25px; border-radius:15px; border:2px solid #444; margin:20px 0;}
-    .tp-green {color:#00FF00; font-weight:bold; font-size:20px;}
-    .sl-red {color:#FF4444; font-weight:bold; font-size:20px;}
-    .entry-blue {color:#44AAFF; font-weight:bold; font-size:22px;}
     .ai-box {background:#0e1117; border-left:6px solid #44AAFF; padding:18px; border-radius:8px; margin:20px 0;
              font-family:'Consolas',monospace; font-size:14px; color:#e0e0e0;}
     .ai-title {color:#44AAFF; font-weight:bold; font-size:17px; margin-bottom:10px;}
@@ -31,51 +26,133 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# ARCHIVO DE TRADES
-# =============================================================================
-CSV_FILE = "paper_trades.csv"
-if not os.path.exists(CSV_FILE):
-    pd.DataFrame(columns=["id","time","symbol","type","entry","size","leverage","sl","tp1","tp2","tp3","status","pnl"]).to_csv(CSV_FILE, index=False)
-
-def load_trades():
-    try: return pd.read_csv(CSV_FILE)
-    except: return pd.DataFrame()
-
-# =============================================================================
 # DATOS DERIVADOS — OKX NUNCA FALLA
 # =============================================================================
 @st.cache_data(ttl=60)
 def get_deriv_data(symbol: str):
     binance_sym = symbol.replace("/", "")
     okx_sym = f"{symbol.split('/')[0]}-{symbol.split('/')[1]}-SWAP"
-    base = symbol.split("/")[0]
 
     # 1. Binance
     try:
-        fr = requests.get(f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={binance_sym}&limit=1", timeout=8).json()
-        oi = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={binance_sym}", timeout=8).json()
-        funding = float(fr[0]["fundingRate"]) * 100 if fr else None
-        open_int = float(oi.get("openInterest", 0)) if oi else None
-        if funding is not None and open_int > 0:
-            return funding, open_int, "Binance"
-    except: pass
+        fr_resp = requests.get(f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={binance_sym}&limit=1", timeout=8).json()
+        oi_resp = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={binance_sym}", timeout=8).json()
+        fr = float(fr_resp[0]["fundingRate"]) * 100 if fr_resp else None
+        oi = float(oi_resp.get("openInterest", 0)) if oi_resp else None
+        if fr is not None and oi > 0:
+            return fr, oi, "Binance"
+    except:
+        pass
 
     # 2. Bybit
     try:
-        fr = requests.get(f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={binance_sym}&limit=1", timeout=8).json()
-        oi = requests.get(f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={binance_sym}", timeout=8).json()
-        if fr.get("retCode") == 0 and fr.get("result", {}).get("list"):
-            funding = float(fr["result"]["list"][0]["fundingRate"]) * 100
-        if oi.get("retCode") == 0 and oi.get("result", {}).get("list"):
-            open_int = float(oi["result"]["list"][0]["openInterest"])
-        if funding is not None and open_int > 0:
-            return funding, open_int, "Bybit"
-    except: pass
+        fr_resp = requests.get(f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={binance_sym}&limit=1", timeout=8).json()
+        oi_resp = requests.get(f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={binance_sym}", timeout=8).json()
+        if fr_resp.get("retCode") == 0 and fr_resp.get("result", {}).get("list"):
+            fr = float(fr_resp["result"]["list"][0]["fundingRate"]) * 100
+        if oi_resp.get("retCode") == 0 and oi_resp.get("result", {}).get("list"):
+            oi = float(oi_resp["result"]["list"][0]["openInterest"])
+        if fr is not None and oi > 0:
+            return fr, oi, "Bybit"
+    except:
+        pass
 
-    # 3. CoinGlass (opcional)
-    if "COINGLASS_API_KEY" in st.secrets:
-        try:
-            headers = {"coinglassSecret": st.secrets["COINGLASS_API_KEY"]}
+    # 3. OKX — ESTE NUNCA FALLA
+    try:
+        fr_resp = requests.get(f"https://www.okx.com/api/v5/public/funding-rate?instId={okx_sym}", timeout=10).json()
+        oi_resp = requests.get(f"https://www.okx.com/api/v5/public/open-interest?instId={okx_sym}", timeout=10).json()
+        if fr_resp.get("code") == "0" and fr_resp.get("data"):
+            fr = float(fr_resp["data"][0]["fundingRate"]) * 100
+        if oi_resp.get("code") == "0" and oi_resp.get("data"):
+            oi = float(oi_resp["data"][0]["openInterest"])
+        if fr is not None and oi > 0:
+            return fr, oi, "OKX"
+    except:
+        pass
+
+    return None, None, "OFFLINE"
+
+# =============================================================================
+# SIDEBAR
+# =============================================================================
+with st.sidebar:
+    st.markdown("<p class='big-font'>QUIMERA v17</p>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align:center'><span class='status-dot-on'>ONLINE</span></div>", unsafe_allow_html=True)
+    st.divider()
+
+    symbol = st.text_input("Ticker", "BTC/USDT").upper()
+    timeframe = st.selectbox("Timeframe", ["15m", "1h", "4h"], index=0)
+
+    st.markdown("### DEBUG DERIVADOS")
+    fr, oi, source = get_deriv_data(symbol)
+    st.write(f"**Fuente:** {source}")
+    if fr:
+        st.success(f"Funding Rate: {fr:.4f}%")
+    if oi:
+        st.success(f"Open Interest: ${oi/1e9:.3f}B")
+
+    auto_refresh = st.checkbox("Auto-refresh (60s)")
+
+# =============================================================================
+# CARGAR DATOS DE PRECIO
+# =============================================================================
+exchange = ccxt.binance({'enableRateLimit': True})
+try:
+    ohlcv = exchange.fetch_ohlcv(symbol.replace("USDT", "/USDT"), timeframe, limit=500)
+    df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+except Exception as e:
+    st.error(f"Error cargando datos: {e}")
+    st.stop()
+
+# Indicadores
+df["EMA20"] = ta.ema(df["close"], length=20)
+df["EMA50"] = ta.ema(df["close"], length=50)
+df["VWAP"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
+df["RSI"] = ta.rsi(df["close"], length=14)
+df["ATR"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+
+current_price = df["close"].iloc[-1]
+
+# =============================================================================
+# INTERFAZ PRINCIPAL
+# =============================================================================
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Precio", f"${current_price:,.2f}")
+col2.metric("Funding Rate", f"{fr:.4f}%" if fr else "N/A")
+col3.metric("Open Interest", f"${oi/1e9:.2f}B" if oi else "N/A")
+col4.metric("Fuente", source)
+
+# Quimera Copilot
+tendencia = "ALCISTA" if df["EMA20"].iloc[-1] > df["EMA50"].iloc[-1] else "BAJISTA"
+st.markdown(f"""
+<div class="ai-box">
+    <div class="ai-title">QUIMERA COPILOT → {source}</div>
+    • Tendencia principal: <b>{tendencia}</b><br>
+    • Funding Rate: <b>{fr:.4f}%</b> → {"LONGS PAGAN → posible SHORT" if fr and fr > 0.01 else "SHORTS PAGAN → posible LONG" if fr and fr < -0.01 else "Neutral"}<br>
+    • Open Interest: <b>{oi/1e9:.2f} mil millones USD</b><br>
+    • RSI: {df["RSI"].iloc[-1]:.1f} | ATR: {df["ATR"].iloc[-1]:.2f}
+</div>
+""", unsafe_allow_html=True)
+
+# Gráfico
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25])
+fig.add_trace(go.Candlestick(x=df["timestamp"],
+                             open=df["open"], high=df["high"],
+                             low=df["low"], close=df["close"], name="Precio"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df["timestamp"], y=df["VWAP"], line=dict(color="orange", width=2), name="VWAP"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df["timestamp"], y=df["EMA20"], line=dict(color="lime", width=1.5), name="EMA20"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df["timestamp"], y=df["EMA50"], line=dict(color="red", width=1.5), name="EMA50"), row=1, col=1)
+fig.add_trace(go.Scatter(x=df["timestamp"], y=df["RSI"], line=dict(color="purple"), name="RSI"), row=2, col=1)
+fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+fig.update_layout(height=700, template="plotly_dark", title=f"{symbol} {timeframe} — Derivados: {source}")
+st.plotly_chart(fig, use_container_width=True)
+
+# Auto-refresh
+if auto_refresh:
+    time.sleep(60)
+    st.rerun()            headers = {"coinglassSecret": st.secrets["COINGLASS_API_KEY"]}
             fr = requests.get(f"https://open-api.coinglass.com/public/v2/funding?symbol={base}", headers=headers, timeout=8).json()
             oi = requests.get(f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base}", headers=headers, timeout=8).json()
             rates = [x["uMarginList"][0]["rate"]*100 for x in fr.get("data",[]) if x.get("uMarginList")]
