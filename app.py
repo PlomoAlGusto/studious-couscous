@@ -14,7 +14,7 @@ import os
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v7.2 Performance", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera v7.3 Lite", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -32,18 +32,19 @@ if 'hunter_logs' not in st.session_state: st.session_state.hunter_logs = []
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
 CSV_FILE = 'paper_trades.csv'
-HUNTER_ASSETS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'PAXG/USDT', 'XAUT/USDT']
+# ⚠️ LISTA REDUCIDA PARA EVITAR CUELGUES
+HUNTER_ASSETS = ['BTC/USDT', 'XRP/USDT']
 
 # -----------------------------------------------------------------------------
 # 2. SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v7.2")
-    st.caption("Performance Edition ⚡")
+    st.title("🦁 QUIMERA v7.3")
+    st.caption("Lite Edition ⚡")
     
     st.header("🔫 HUNTER AUTO")
     hunter_active = st.toggle("ACTIVAR CAZA", False)
-    if hunter_active: st.success("ON 🟢")
+    if hunter_active: st.success("ON (BTC/XRP)")
     
     st.divider()
     st.header("🔬 MANUAL")
@@ -59,44 +60,44 @@ with st.sidebar:
     auto_refresh = st.checkbox("🔄 Refresco (60s)", False)
 
 # -----------------------------------------------------------------------------
-# 3. MOTORES DE DATOS (OPTIMIZADOS)
+# 3. MOTORES LIGEROS
 # -----------------------------------------------------------------------------
 def init_exchange():
     try:
         if "BINANCE_API_KEY" in st.secrets:
-            # Timeout corto para no colgar la app
-            ex = ccxt.binance({'apiKey': st.secrets["BINANCE_API_KEY"], 'secret': st.secrets["BINANCE_SECRET"], 'options': {'defaultType': 'spot'}, 'timeout': 10000})
+            # Timeout muy corto para fallar rápido si se cuelga
+            ex = ccxt.binance({'apiKey': st.secrets["BINANCE_API_KEY"], 'secret': st.secrets["BINANCE_SECRET"], 'options': {'defaultType': 'spot'}, 'timeout': 5000})
             return ex, "Binance"
     except: pass
-    return ccxt.kraken({'timeout': 10000}), "Kraken"
+    return ccxt.kraken({'timeout': 5000}), "Kraken"
 
 exchange, source_name = init_exchange()
 
-@st.cache_data(ttl=30) # Cache aumentado a 30s para ir más fluido
-def get_full_analysis_data(ticker, tf):
+# CACHÉ CORTO PARA EVITAR BUCLES
+@st.cache_data(ttl=15)
+def get_data_lite(ticker, tf):
     try:
-        ohlcv = exchange.fetch_ohlcv(ticker, tf, limit=100) # Bajamos limite a 100 velas
+        # Solo bajamos 100 velas para ir rápido
+        ohlcv = exchange.fetch_ohlcv(ticker, tf, limit=100)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         
-        # Trend 4H (Optimizado)
+        # MTF 4H Simplificado
         trend4h = "NEUTRO"
-        if use_mtf:
-            try:
-                ohlcv4h = exchange.fetch_ohlcv(ticker, '4h', limit=30)
-                df4h = pd.DataFrame(ohlcv4h, columns=['t', 'o', 'h', 'l', 'c', 'v'])
-                ema50_4h = ta.ema(df4h['c'], length=50).iloc[-1] if len(df4h) > 50 else df4h['c'].mean()
-                trend4h = "BULLISH" if df4h['c'].iloc[-1] > ema50_4h else "BEARISH"
-            except: pass
+        try:
+            ohlcv4h = exchange.fetch_ohlcv(ticker, '4h', limit=30)
+            df4h = pd.DataFrame(ohlcv4h, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+            ema50 = ta.ema(df4h['c'], length=50).iloc[-1] if len(df4h) > 50 else df4h['c'].mean()
+            trend4h = "BULLISH" if df4h['c'].iloc[-1] > ema50 else "BEARISH"
+        except: pass
         
-        # OBI (Optimizado)
+        # OBI Ultrarrápido (Solo top 5 ordenes)
         obi = 0
-        if use_obi:
-            try:
-                book = exchange.fetch_order_book(ticker, limit=5) # Solo top 5 ordenes
-                b, a = sum([x[1] for x in book['bids']]), sum([x[1] for x in book['asks']])
-                obi = (b-a)/(b+a) if (b+a)>0 else 0
-            except: pass
+        try:
+            book = exchange.fetch_order_book(ticker, limit=5)
+            b, a = sum([x[1] for x in book['bids']]), sum([x[1] for x in book['asks']])
+            obi = (b-a)/(b+a) if (b+a)>0 else 0
+        except: pass
         
         return df, obi, trend4h
     except: return None, 0, "NEUTRO"
@@ -127,45 +128,44 @@ def run_strategy_check(df, obi, trend_4h):
     return signal, row['ATR']
 
 # -----------------------------------------------------------------------------
-# 4. ANALYTICS & CHARTS
+# 4. ANALYTICS
 # -----------------------------------------------------------------------------
 def render_analytics(df_trades, unique_key):
     if df_trades.empty:
-        st.info("No hay datos suficientes para generar analíticas.")
+        st.caption("Esperando datos...")
         return
 
     closed = df_trades[df_trades['status'] == 'CLOSED'].copy()
     if closed.empty:
-        st.info("Aún no has cerrado ninguna operación.")
+        st.caption("Sin operaciones cerradas aún.")
         return
 
     closed['cumulative_pnl'] = closed['pnl'].cumsum()
     closed['equity'] = 10000 + closed['cumulative_pnl']
-    start_point = pd.DataFrame([{'time': 'Inicio', 'equity': 10000}])
-    equity_curve = pd.concat([start_point, closed[['time', 'equity']]])
+    start = pd.DataFrame([{'time': 'Inicio', 'equity': 10000}])
+    curve = pd.concat([start, closed[['time', 'equity']]])
 
-    total_trades = len(closed)
     wins = len(closed[closed['pnl'] > 0])
-    win_rate = (wins / total_trades) * 100
-    total_profit = closed['pnl'].sum()
+    total = len(closed)
+    win_rate = (wins / total) * 100 if total > 0 else 0
+    profit = closed['pnl'].sum()
 
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Beneficio Neto", f"${total_profit:,.2f}")
-    k2.metric("Win Rate", f"{win_rate:.1f}%")
-    k3.metric("Trades", total_trades)
+    c1, c2 = st.columns(2)
+    c1.metric("PnL Neto", f"${profit:.2f}", delta_color="normal")
+    c2.metric("Win Rate", f"{win_rate:.0f}%")
 
-    fig = px.area(equity_curve, x='time', y='equity', title='Curva de Capital')
-    fig.update_layout(template="plotly_dark", height=300)
-    fig.update_traces(line_color='#00FF00' if total_profit > 0 else '#FF4444')
+    fig = px.area(curve, x='time', y='equity', title="Curva de Capital")
+    fig.update_layout(template="plotly_dark", height=250, margin=dict(l=0,r=0,t=30,b=0))
+    fig.update_traces(line_color='#00FF00' if profit > 0 else '#FF4444')
     st.plotly_chart(fig, use_container_width=True, key=unique_key)
 
 # -----------------------------------------------------------------------------
-# 5. GESTIÓN AUTOMÁTICA
+# 5. GESTIÓN AUTOMÁTICA (HUNTER)
 # -----------------------------------------------------------------------------
 def log_event(msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
     st.session_state.hunter_logs.insert(0, f"[{timestamp}] {msg}")
-    if len(st.session_state.hunter_logs) > 50: st.session_state.hunter_logs.pop()
+    if len(st.session_state.hunter_logs) > 20: st.session_state.hunter_logs.pop()
 
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
@@ -181,68 +181,44 @@ def execute_trade_db(sym, type, entry, sl, tp1, tp2, tp3, size, atr, reason="Man
 def send_telegram_msg(msg):
     t, c = st.secrets.get("TELEGRAM_TOKEN", ""), st.secrets.get("TELEGRAM_CHAT_ID", "")
     if t and c: 
-        try: requests.get(f"https://api.telegram.org/bot{t}/sendMessage", params={"chat_id": c, "text": msg}, timeout=2)
+        try: requests.get(f"https://api.telegram.org/bot{t}/sendMessage", params={"chat_id": c, "text": msg}, timeout=1)
         except: pass
 
-# -----------------------------------------------------------------------------
-# 6. INTERFAZ GRÁFICA (PRIMERO LA UI, LUEGO LOS DATOS)
-# -----------------------------------------------------------------------------
-# Dibujamos las pestañas PRIMERO para que no se quede la pantalla negra
-tab1, tab2, tab3 = st.tabs(["📊 MANUAL", "🧪 CARTERA & ANALYTICS", "🔫 HUNTER LOGS"])
-
-# --- LÓGICA PRINCIPAL ---
-prices_map = {}
-
-# Ejecución HUNTER (Con barra de carga)
-if hunter_active:
-    with st.status("🦁 Cazando oportunidades...", expanded=True) as status:
-        for coin in HUNTER_ASSETS:
-            status.write(f"Analizando {coin}...")
-            df, obi, trend_4h = get_full_analysis_data(coin, tf)
+def run_hunter_cycle():
+    # Ciclo optimizado: No bloquea la UI, solo añade operaciones si las encuentra
+    for coin in HUNTER_ASSETS:
+        df, obi, trend_4h = get_data_lite(coin, tf) # Usamos la version LITE
+        if df is not None:
+            df = calculate_indicators(df)
+            sig, atr = run_strategy_check(df, obi, trend_4h)
             
-            if df is not None:
-                prices_map[coin] = df['close'].iloc[-1] # Guardar precio para gestión
-                df = calculate_indicators(df)
-                sig, atr = run_strategy_check(df, obi, trend_4h)
+            if sig != "NEUTRO":
+                # Check si ya existe
+                df_t = load_trades()
+                is_open = False
+                if not df_t.empty:
+                    if not df_t[(df_t['status']=='OPEN') & (df_t['symbol']==coin)].empty: is_open = True
                 
-                # DISPARO AUTOMÁTICO
-                if sig != "NEUTRO":
-                    df_trades = load_trades()
-                    is_open = False
-                    if not df_trades.empty:
-                        if not df_trades[(df_trades['status'] == 'OPEN') & (df_trades['symbol'] == coin)].empty:
-                            is_open = True
+                if not is_open:
+                    p = df['close'].iloc[-1]
+                    sl_d = atr * 1.5
+                    if sig == "LONG": sl, tp1, tp2, tp3 = p-sl_d, p+sl_d, p+(sl_d*2), p+(sl_d*3.5)
+                    else: sl, tp1, tp2, tp3 = p+sl_d, p-sl_d, p-(sl_d*2), p-(sl_d*3.5)
                     
-                    if not is_open:
-                        p = df['close'].iloc[-1]
-                        sl_dist = atr * 1.5
-                        if sig == "LONG":
-                            sl, tp1, tp2, tp3 = p-sl_dist, p+sl_dist, p+(sl_dist*2), p+(sl_dist*3.5)
-                        else:
-                            sl, tp1, tp2, tp3 = p+sl_dist, p-sl_dist, p-(sl_dist*2), p-(sl_dist*3.5)
-                            
-                        execute_trade_db(coin, sig, p, sl, tp1, tp2, tp3, 100, atr, "Auto-Hunter")
-                        msg = f"🔫 HUNTER: {sig} {coin} @ ${p}"
-                        log_event(msg)
-                        send_telegram_msg(msg)
-                        status.write(f"✅ DISPARO: {coin}")
+                    execute_trade_db(coin, sig, p, sl, tp1, tp2, tp3, 100, atr, "Auto")
+                    msg = f"🔫 AUTO: {sig} {coin} @ ${p}"
+                    log_event(msg)
+                    send_telegram_msg(msg)
 
-        status.update(label="Ciclo completado", state="complete", expanded=False)
-
-# Obtener datos MANUALES (si no es hunter mode, necesitamos al menos el precio manual)
-df_m, obi_m, trend_m = get_full_analysis_data(symbol, tf)
-if df_m is not None: 
-    prices_map[symbol] = df_m['close'].iloc[-1]
-
-# GESTIÓN DE POSICIONES (Loop rápido)
-df_trades = load_trades()
-if not df_trades.empty:
-    open_idx = df_trades.index[df_trades['status'] == "OPEN"].tolist()
+def manage_positions(prices_map):
+    df = load_trades()
+    if df.empty: return
+    open_idx = df.index[df['status'] == "OPEN"].tolist()
     updated = False
     for idx in open_idx:
-        row = df_trades.loc[idx]
+        row = df.loc[idx]
         curr = prices_map.get(row['symbol'])
-        if not curr: continue # Si no tenemos precio actualizado, saltamos
+        if not curr: continue
         
         close_reason = ""
         pnl = 0
@@ -254,12 +230,33 @@ if not df_trades.empty:
             elif curr >= row['sl']: close_reason="SL"; pnl=(row['entry']-row['sl'])*row['size']
             
         if close_reason:
-            df_trades.at[idx, 'status'] = "CLOSED"; df_trades.at[idx, 'pnl'] = pnl; df_trades.at[idx, 'reason'] = close_reason
+            df.at[idx, 'status'] = "CLOSED"; df.at[idx, 'pnl'] = pnl; df.at[idx, 'reason'] = close_reason
             send_telegram_msg(f"💰 CIERRE {row['symbol']}: {close_reason} (${pnl:.2f})")
             updated = True
-    if updated: df_trades.to_csv(CSV_FILE, index=False)
+    if updated: df.to_csv(CSV_FILE, index=False)
 
-# --- RENDERIZADO DE TABS ---
+# -----------------------------------------------------------------------------
+# 6. EJECUCIÓN PRINCIPAL (RENDER PRIMERO, CÁLCULO DESPUÉS)
+# -----------------------------------------------------------------------------
+tab1, tab2, tab3 = st.tabs(["📊 MANUAL", "🧪 CARTERA", "🔫 HUNTER"])
+
+# 1. LÓGICA HUNTER (Solo si activo)
+prices_map = {}
+if hunter_active:
+    run_hunter_cycle()
+    # Obtener precios rápidos para gestión
+    for c in HUNTER_ASSETS:
+        df_tmp, _, _ = get_data_lite(c, tf)
+        if df_tmp is not None: prices_map[c] = df_tmp['close'].iloc[-1]
+
+# 2. DATOS MANUALES
+df_m, obi_m, trend_m = get_data_lite(symbol, tf)
+if df_m is not None: prices_map[symbol] = df_m['close'].iloc[-1]
+
+# 3. GESTIÓN POSICIONES
+manage_positions(prices_map)
+
+# --- RENDER TABS ---
 
 with tab1:
     if df_m is not None:
@@ -269,36 +266,34 @@ with tab1:
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Precio", f"${curr:,.2f}")
-        c2.metric("Trend 4H", trend_m)
+        c2.metric("Tendencia 4H", trend_m)
         c3.metric("OBI", f"{obi_m:.1%}")
         
         if sig != "NEUTRO":
-            st.success(f"SEÑAL MANUAL: {sig}")
-            if st.button(f"EJECUTAR {sig}"):
+            st.success(f"SEÑAL: {sig}")
+            if st.button("EJECUTAR MANUAL"):
                 execute_trade_db(symbol, sig, curr, curr-(atr*1.5), curr+atr, curr+(atr*2), curr+(atr*3.5), 100, atr)
-                st.toast("Orden manual enviada")
-        
+                st.toast("Enviada")
+        else:
+            st.info("Sin señal clara.")
+            
         fig = go.Figure(data=[go.Candlestick(x=df_m['timestamp'], open=df_m['open'], high=df_m['high'], low=df_m['low'], close=df_m['close'])])
-        fig.update_layout(height=400, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0))
+        fig.update_layout(height=350, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0))
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("Cargando datos manuales...")
 
 with tab2:
-    df_view = load_trades()
-    st.subheader("📈 Rendimiento")
-    render_analytics(df_view, "analytics_key")
+    df_t = load_trades()
+    render_analytics(df_t, "k1")
     st.divider()
-    st.subheader("Abiertas")
-    st.dataframe(df_view[df_view['status']=='OPEN'])
-    st.subheader("Historial")
-    st.dataframe(df_view[df_view['status']=='CLOSED'])
+    st.caption("Operaciones Abiertas")
+    st.dataframe(df_t[df_t['status']=='OPEN'], use_container_width=True)
+    st.caption("Historial")
+    st.dataframe(df_t[df_t['status']=='CLOSED'], use_container_width=True)
 
 with tab3:
-    st.markdown("### 🛰️ Centro de Mando")
-    st.write(f"Monitoreando: {', '.join(HUNTER_ASSETS)}")
-    logs_txt = "\n".join(st.session_state.hunter_logs)
-    st.text_area("Logs:", value=logs_txt, height=300, disabled=True)
+    st.markdown("### 🛰️ Logs")
+    st.text_area("", value="\n".join(st.session_state.hunter_logs), height=200)
+    render_analytics(load_trades(), "k2")
 
 if auto_refresh or hunter_active:
     time.sleep(60)
