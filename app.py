@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v15.7 Stable", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v15.6 Stable", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -48,6 +48,7 @@ st.markdown("""
     .clock-closed { background-color: rgba(255, 0, 0, 0.1); border: 1px solid #555; color: #888; }
     
     .status-dot-on { color: #00FF00; font-weight: bold; text-shadow: 0 0 5px #00FF00; }
+    .status-dot-off { color: #FF4444; font-weight: bold; }
     
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
@@ -66,11 +67,8 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
-# --- GESTIÓN DE CLAVES SEGURA ---
-try:
-    COINGLASS_API_KEY = st.secrets["COINGLASS_KEY"]
-except:
-    COINGLASS_API_KEY = None # Se usará Bybit/dYdX como fallback
+# CLAVE API (Directa para evitar problemas)
+COINGLASS_API_KEY = "1d4579f4c59149c6b6a1d83494a4f67c"
 
 # -----------------------------------------------------------------------------
 # 2. MOTOR DE DATOS
@@ -109,10 +107,13 @@ def get_market_sessions():
 
 @st.cache_data(ttl=120)
 def get_deriv_data(symbol):
+    """
+    Obtiene Funding Rate y Open Interest usando Headers falsos para evitar bloqueos.
+    """
     base_coin = symbol.split('/')[0]
     headers_browser = {'User-Agent': 'Mozilla/5.0'}
     
-    # 1. COINGLASS (Prioridad si hay Key en secrets)
+    # 1. COINGLASS
     if COINGLASS_API_KEY:
         try:
             headers_cg = {"coinglassSecret": COINGLASS_API_KEY}
@@ -135,22 +136,26 @@ def get_deriv_data(symbol):
             if total_oi > 0: return avg_fr, total_oi, "CoinGlass"
         except: pass
 
-    # 2. BYBIT (Fallback Público)
+    # 2. BYBIT
     try:
         url = f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_coin}USDT"
         r = requests.get(url, headers=headers_browser, timeout=3).json()
         if r['retCode'] == 0:
             info = r['result']['list'][0]
-            return float(info['fundingRate']) * 100, float(info['openInterestValue']), "Bybit"
+            fr = float(info['fundingRate']) * 100
+            oi_val = float(info['openInterestValue'])
+            return fr, oi_val, "Bybit"
     except: pass
 
-    # 3. DYDX (Fallback Descentralizado)
+    # 3. DYDX
     try:
         dydx_symbol = f"{base_coin}-USD"
         url = f"https://api.dydx.exchange/v3/markets/{dydx_symbol}"
         r = requests.get(url, headers=headers_browser, timeout=3).json()
         market = r['market']
-        return float(market['nextFundingRate']) * 100, float(market['openInterest']), "dYdX"
+        fr = float(market['nextFundingRate']) * 100
+        oi = float(market['openInterest'])
+        return fr, oi, "dYdX"
     except: pass
 
     return 0.0, 0.0, "Error"
@@ -176,7 +181,7 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v15.7")
+    st.title("🦁 QUIMERA v15.6")
     st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
     get_market_sessions()
     st.divider()
