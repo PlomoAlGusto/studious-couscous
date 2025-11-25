@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v16.2 Polished", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v16.3 Fix", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -30,25 +30,27 @@ st.markdown("""
     .entry-blue { color: #44AAFF; font-weight: bold; font-size: 18px; }
     .label-mini { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px;}
     
-    /* CAJA IA REFINADA */
-    .ai-box {
+    /* CAJA IA ROBUSTA (HTML SIMPLIFICADO) */
+    .ai-container {
         background-color: #111; 
         border-left: 5px solid #44AAFF; 
-        padding: 20px; 
-        border-radius: 8px; 
-        margin-bottom: 20px; 
-        font-family: 'Segoe UI', 'Roboto', sans-serif;
+        padding: 15px; 
+        border-radius: 5px; 
+        margin-bottom: 15px; 
+        font-family: sans-serif;
         font-size: 14px;
-        color: #ddd;
-        line-height: 1.8;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        line-height: 1.6;
+        color: #eee;
     }
-    .ai-title { color: #44AAFF; font-weight: 900; font-size: 16px; margin-bottom: 10px; display: block; letter-spacing: 1px; text-transform: uppercase;}
-    .ai-row { display: flex; margin-bottom: 8px; align-items: center; }
-    .ai-icon { margin-right: 10px; font-size: 18px; width: 25px; text-align: center;}
-    .ai-label { font-weight: bold; color: #888; margin-right: 5px; min-width: 100px; }
-    .ai-value { color: #fff; }
-    .ai-verdict { margin-top: 15px; padding-top: 10px; border-top: 1px solid #333; font-size: 16px; font-weight: bold; }
+    .ai-header { color: #44AAFF; font-weight: 900; font-size: 16px; margin-bottom: 8px; display: block; }
+    .ai-line { margin-bottom: 4px; }
+    .ai-verdict-box { 
+        margin-top: 10px; 
+        padding-top: 10px; 
+        border-top: 1px solid #333; 
+        font-size: 16px; 
+        font-weight: bold; 
+    }
     
     .market-clock { font-size: 12px; padding: 5px; margin-bottom: 5px; border-radius: 4px; display: flex; justify-content: space-between;}
     .clock-open { background-color: rgba(0, 255, 0, 0.2); border: 1px solid #00FF00; }
@@ -59,11 +61,6 @@ st.markdown("""
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
     .badge-neutral { background-color: #333; color: #aaa; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #555; margin-right: 4px; }
-    
-    .stats-bar {
-        background-color: #1E1E1E; border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 20px;
-        display: flex; justify-content: space-around; align-items: center;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -197,7 +194,7 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v16.2")
+    st.title("🦁 QUIMERA v16.3")
     st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
     get_market_sessions()
     st.divider()
@@ -296,11 +293,11 @@ def calculate_indicators(df):
     df = pd.concat([df, adx], axis=1)
     df['MFI'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
     
-    # CORRECCIÓN AQUÍ: CALCULO TSI (Estaba faltando)
     try:
         tsi = ta.tsi(df['close'], fast=13, slow=25)
-        # pandas_ta devuelve un df o series, aseguramos nombre
-        df['TSI'] = tsi.iloc[:, 0] if isinstance(tsi, pd.DataFrame) else tsi
+        df = pd.concat([df, tsi], axis=1)
+        tsi_col = [c for c in df.columns if 'TSI' in c][0]
+        df['TSI'] = df[tsi_col]
     except: df['TSI'] = 0
     
     high_w, low_w, close_w = df['high'].rolling(20).max(), df['low'].rolling(20).min(), df['close']
@@ -309,7 +306,7 @@ def calculate_indicators(df):
     return df.fillna(method='bfill').fillna(method='ffill')
 
 # -----------------------------------------------------------------------------
-# 5. IA ANALISTA (REFINADA)
+# 5. IA ANALISTA (HTML ROBUSTO)
 # -----------------------------------------------------------------------------
 def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src, signal, prob):
     # 1. CONTEXTO MULTI-TIMEFRAME
@@ -352,16 +349,17 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     else:
         verdict = f"⏳ VEREDICTO: <span style='color:#888'>ESPERAR CONFIRMACIÓN</span>"
 
+    # HTML SIMPLIFICADO (SIN CLASES COMPLEJAS QUE ROMPAN)
     html = f"""
-    <div class='ai-box'>
-        <span class='ai-title'>🤖 QUIMERA COPILOT <span style='font-size:10px; color:#666;'>(Data: {data_src})</span></span>
+    <div class='ai-container'>
+        <span class='ai-header'>🤖 QUIMERA COPILOT <span style='font-size:10px; color:#888;'>(Data: {data_src})</span></span>
         
-        <div class='ai-row'><span class='ai-icon'>📡</span><span class='ai-label'>ESTRUCTURA:</span> <span class='ai-value'>{context}</span></div>
-        <div class='ai-row'><span class='ai-icon'>📊</span><span class='ai-label'>DERIVADOS:</span> <span class='ai-value'>Funding: <b style='color:{fr_color}'>{deriv_txt}</b> | OI: <b style='color:#44AAFF'>{oi_fmt}</b></span></div>
-        <div class='ai-row'><span class='ai-icon'>🔥</span><span class='ai-label'>MOMENTO:</span> <span class='ai-value'>Gasolina: <b style='color:{gas_color}'>{gas_status}</b> | TSI: {tsi_status} ({tsi:.2f}) | ADX: {adx:.1f}</span></div>
-        <div class='ai-row'><span class='ai-icon'>⛽</span><span class='ai-label'>LIBRO:</span> <span class='ai-value'>Presión <b style='color:{obi_color}'>{pressure}</b> ({obi*100:.1f}%)</span></div>
+        <div class='ai-line'>📡 <b>ESTRUCTURA:</b> {context}</div>
+        <div class='ai-line'>📊 <b>DERIVADOS:</b> Funding: <b style='color:{fr_color}'>{deriv_txt}</b> | OI: <b style='color:#44AAFF'>{oi_fmt}</b></div>
+        <div class='ai-line'>🔥 <b>MOMENTO:</b> Gasolina: <b style='color:{gas_color}'>{gas_status}</b> | TSI: {tsi_status} ({tsi:.2f}) | ADX: {adx:.1f}</div>
+        <div class='ai-line'>⛽ <b>LIBRO:</b> Presión <b style='color:{obi_color}'>{pressure}</b> ({obi*100:.1f}%)</div>
         
-        <div class='ai-verdict'>{verdict}</div>
+        <div class='ai-verdict-box'>{verdict}</div>
     </div>
     """
     return html
