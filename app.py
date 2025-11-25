@@ -133,62 +133,63 @@ def get_market_sessions():
 
 @st.cache_data(ttl=60)
 def get_deriv_data(symbol):
-    COINGLASS_API_KEY = st.secrets.get("COINGLASS_API_KEY")  # Leer de secrets
-    
-    # 1. Intento con CoinGlass
-    if COINGLASS_API_KEY:
-        try:
-            base_coin = symbol.split('/')[0]
-            headers = {"coinglassSecret": COINGLASS_API_KEY}
-            url_oi = f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base_coin}"
-            r_oi = requests.get(url_oi, headers=headers, timeout=2).json()
-            url_fr = f"https://open-api.coinglass.com/public/v2/funding?symbol={base_coin}"
-            r_fr = requests.get(url_fr, headers=headers, timeout=2).json()
-            
-            total_oi = 0.0
-            avg_fr = 0.0
-            
-            if r_oi.get('success') and r_oi.get('data'):
-                for ex in r_oi['data']: total_oi += ex.get('openInterestAmount', 0) * ex.get('price', 0)
-            
-            if r_fr.get('success') and r_fr.get('data'):
-                for ex in r_fr['data']:
-                    if ex['exchangeName'] == 'Binance':
-                        if 'uMarginList' in ex and len(ex['uMarginList']) > 0: avg_fr = ex['uMarginList'][0]['rate']
-                        break
-            
-            if total_oi > 0: return avg_fr, total_oi, "CoinGlass"
-        except Exception as e:
-            print(f"Error CoinGlass: {e}")
-    
-    # 2. Intento con CCXT (Binance Futures)
+    # Normaliza símbolo: e.g., "BTC/USDT" -> "BTC/USDT:USDT" para perpetuos lineales
+    base = symbol.split('/')[0]
+    quote = symbol.split('/')[1]
+    symbol_perp = f"{base}/{quote}:{quote}"  # 'BTC/USDT:USDT'
+
+    COINGLASS_API_KEY = st.secrets.get("COINGLASS_API_KEY")
+
+    # 1. Prioridad: CCXT Binance Futures (Gratuito, Público)
     try:
         exchange_f = ccxt.binanceusdm({'enableRateLimit': True})
-        ticker = exchange_f.fetch_ticker(symbol)
-        fr = float(ticker['info']['lastFundingRate']) * 100 if 'lastFundingRate' in ticker['info'] else None
-        oi_data = exchange_f.fetch_open_interest(symbol)
-        oi_val = float(oi_data['openInterestValue']) if oi_data and 'openInterestValue' in oi_data else None
-        if fr is not None and oi_val is not None:
-            return fr, oi_val, "BinanceAPI"
+        exchange_f.load_markets()  # Valida mercados
+        fr_data = exchange_f.fetch_funding_rate(symbol_perp)
+        fr = fr_data['fundingRate'] * 100 if fr_data['fundingRate'] else None
+        oi_data = exchange_f.fetch_open_interest(symbol_perp)
+        oi_val = oi_data['openInterestValue'] if 'openInterestValue' in oi_data else None
+        if fr is not None and oi_val is not None and oi_val > 0:
+            return fr, oi_val, "Binance Futures (CCXT)"
     except Exception as e:
-        print(f"Error Binance: {e}")
+        print(f"Error Binance CCXT: {e}")
 
-    # 3. Intento con CCXT (Kraken Futures - Mejorado)
+    # 2. Fallback: CoinGlass (Si key válida)
+    if COINGLASS_API_KEY:
+        try:
+            headers = {"coinglassSecret": COINGLASS_API_KEY}
+            url_fr = f"https://open-api.coinglass.com/public/v2/funding?symbol={base}"
+            r_fr = requests.get(url_fr, headers=headers, timeout=5).json()
+            url_oi = f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base}"
+            r_oi = requests.get(url_oi, headers=headers, timeout=5).json()
+            
+            avg_fr = 0.0
+            total_oi = 0.0
+            if r_fr.get('success') and r_fr.get('data'):
+                # Promedio FR de exchanges principales
+                fr_list = [ex['uMarginList'][0]['rate'] * 100 for ex in r_fr['data'] if ex['uMarginList']]
+                avg_fr = np.mean(fr_list) if fr_list else None
+            if r_oi.get('success') and r_oi.get('data'):
+                total_oi = sum(ex.get('openInterestAmount', 0) * ex.get('price', 1) for ex in r_oi['data'])
+            
+            if avg_fr is not None and total_oi > 0:
+                return avg_fr, total_oi, "CoinGlass"
+        except Exception as e:
+            print(f"Error CoinGlass: {e}")
+
+    # 3. Fallback Final: Bybit via CCXT (Alternativa gratuita)
     try:
-        exchange_k = ccxt.krakenfutures({'enableRateLimit': True})
-        kraken_symbol = 'PF_XBTUSD' if 'BTC' in symbol else None  # Solo para BTC como ejemplo; extender si necesario
-        if kraken_symbol:
-            fr_data = exchange_k.fetch_funding_rate(kraken_symbol)
-            fr = float(fr_data['fundingRate']) * 100 if 'fundingRate' in fr_data else None
-            oi_data = exchange_k.fetch_open_interest(kraken_symbol)
-            oi_val = float(oi_data['openInterestValue']) if 'openInterestValue' in oi_data else None
-            if fr is not None and oi_val is not None:
-                return fr, oi_val, "KrakenAPI"
+        exchange_b = ccxt.bybit({'enableRateLimit': True})
+        exchange_b.load_markets()
+        fr_data = exchange_b.fetch_funding_rate(symbol_perp)
+        fr = fr_data['fundingRate'] * 100
+        oi_data = exchange_b.fetch_open_interest(symbol_perp)
+        oi_val = oi_data['openInterestValue']
+        if fr is not None and oi_val is not None:
+            return fr, oi_val, "Bybit (CCXT)"
     except Exception as e:
-        print(f"Error Kraken: {e}")
+        print(f"Error Bybit: {e}")
 
-    # Fallback final: Retornar None para manejar N/A
-    return None, None, "OFFLINE"
+    return None, None, "OFFLINE"  # Maneja en UI como "N/A"
 
 @st.cache_data(ttl=30)
 def get_mtf_trends_analysis(symbol):
@@ -339,13 +340,17 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     
     # 2. DATOS DERIVADOS (Manejo de N/A)
     if fr is None or open_interest is None:
-        deriv_txt = "<span style='color:#FFFF00'>Fuentes Derivadas OFFLINE (N/A)</span>"
+        deriv_txt = "<span style='color:#FFFF00'>Fuentes Derivadas OFFLINE (Verifica conexión/API key)</span>"
         oi_txt = ""
     else:
         deriv_txt = f"Funding Rate: <b style='color:#fff'>{fr:.4f}%</b>"
-        if fr > 0.01: deriv_txt += " (Long Squeeze Risk)"
-        elif fr < -0.01: deriv_txt += " (Short Squeeze Risk)"
-        else: deriv_txt += " (Saludable)"
+        squeeze_risk = ""
+        if fr > 0.02: squeeze_risk = " (HIGH Long Squeeze - Evita LONG)"
+        elif fr < -0.02: squeeze_risk = " (HIGH Short Squeeze - Evita SHORT)"
+        elif fr > 0.01: squeeze_risk = " (Long Squeeze Risk)"
+        elif fr < -0.01: squeeze_risk = " (Short Squeeze Risk)"
+        else: squeeze_risk = " (Saludable)"
+        deriv_txt += squeeze_risk
         
         if open_interest > 1000000000: oi_fmt = f"${open_interest/1000000000:.2f}B"
         elif open_interest > 1000000: oi_fmt = f"${open_interest/1000000:.2f}M"
@@ -381,7 +386,7 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     """
     return html
 
-def run_strategy(df, obi, trend_4h, filters):
+def run_strategy(df, obi, trend_4h, filters, fr):
     row = df.iloc[-1]
     score, max_score, details = 0, 0, []
     
@@ -426,6 +431,12 @@ def run_strategy(df, obi, trend_4h, filters):
     prob = 50.0
     if max_score > 0: prob = 50 + ((abs(score)/max_score)*45)
     thermo_score = (score / max_score) * 100 if max_score > 0 else 0
+    
+    # Filtro con FR para precisión
+    if fr is not None:
+        if signal == "LONG" and fr > 0.01: signal = "NEUTRO"
+        elif signal == "SHORT" and fr < -0.01: signal = "NEUTRO"
+        prob += 5 if abs(fr) < 0.005 else -5  # Ajusta prob con FR saludable
     
     return signal, row['ATR'], prob, thermo_score, details
 
@@ -508,14 +519,14 @@ df, obi, trend_4h = get_mtf_data(symbol, tf)
 if df is not None:
     df = calculate_indicators(df)
     filters = {'use_mtf': use_mtf, 'use_ema': use_ema, 'use_vwap': use_vwap, 'use_ichi': use_ichi, 'use_regime': use_regime, 'use_rsi': use_rsi, 'use_obi': use_obi, 'use_tsi': use_tsi}
-    signal, atr, prob, thermo_score, details_list = run_strategy(df, obi, trend_4h, filters)
+    fr, open_interest, data_src = get_deriv_data(symbol)
+    signal, atr, prob, thermo_score, details_list = run_strategy(df, obi, trend_4h, filters, fr)
     current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
     mfi_val, adx_val = df['MFI'].iloc[-1], df['ADX_14'].iloc[-1]
     
     # DATOS FIX (Coinglass / Bybit / dYdX)
     fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
-    fr, open_interest, data_src = get_deriv_data(symbol)
     mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
     
     # IA (HTML Correcto + TSI)
@@ -609,17 +620,15 @@ if df is not None:
         
         # WIDGETS
         if fr is None:
-            c2.metric("Funding Rate", "N/A", delta_color="off")
+            c2.metric("Funding Rate", "N/A", delta="OFFLINE")
         else:
-            c2.metric("Funding Rate", f"{fr:.4f}%", delta_color="inverse")
+            c2.metric("Funding Rate", f"{fr:.4f}%", delta=f"{fr:.4f}" if fr > 0 else f"{fr:.4f}", delta_color="inverse")
         
         # Formateo Open Interest
         if open_interest is None:
             c3.metric("Open Interest", "N/A")
         else:
-            if open_interest > 1000000000: oi_show = f"${open_interest/1000000000:.2f}B"
-            elif open_interest > 1000000: oi_show = f"${open_interest/1000000:.2f}M"
-            else: oi_show = f"${open_interest:,.0f}"
+            oi_show = f"${open_interest/1e9:.2f}B" if open_interest > 1e9 else f"${open_interest/1e6:.2f}M"
             c3.metric("Open Interest", oi_show)
         
         # MTF
@@ -655,7 +664,7 @@ if df is not None:
         
         st.divider()
 
-        if setup and calc_dir:
+        if setup:
             prob_str = f"{prob:.1f}%"
             prob_color = "#00FF00" if prob >= 80 else "#FFFF00" if prob >= 60 else "#FF4444"
             if setup['status'] == "CONFIRMED":
