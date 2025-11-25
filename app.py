@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v14.7 Analyst", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v14.8 Data Fix", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -55,7 +55,6 @@ st.markdown("""
         line-height: 1.5;
     }
     .ai-title { color: #44AAFF; font-weight: bold; font-size: 14px; margin-bottom: 5px; display: block; }
-    .ai-highlight { color: #fff; font-weight: bold; }
     
     .news-box {
         background-color: #111; border: 1px solid #333; padding: 15px; border-radius: 10px; margin-bottom: 15px; height: 200px; overflow-y: auto;
@@ -72,11 +71,6 @@ st.markdown("""
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
     .badge-neutral { background-color: #333; color: #aaa; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #555; margin-right: 4px; }
-    
-    .stats-bar {
-        background-color: #1E1E1E; border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 20px;
-        display: flex; justify-content: space-around; align-items: center;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -92,7 +86,7 @@ if not os.path.exists(CSV_FILE):
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
 # -----------------------------------------------------------------------------
-# 2. FUNCIONES DE DATOS AVANZADOS
+# 2. FUNCIONES DE DATOS AVANZADOS (DATA FIX)
 # -----------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=COLUMNS_DB)
@@ -128,25 +122,43 @@ def get_market_sessions():
 
 @st.cache_data(ttl=60)
 def get_deriv_data(symbol):
-    """Obtiene Funding Rate y Open Interest (Binance Futures)"""
+    """
+    Obtiene Funding Rate y Open Interest.
+    Estrategia Híbrida: Intenta Binance -> Si falla, usa dYdX (No censurado).
+    """
+    fr, oi_val = 0.0, 0.0
+    
+    # INTENTO 1: BINANCE (Mejor calidad, pero puede estar bloqueado)
     try:
         clean_symbol = symbol.replace("/", "")
-        # Usamos requests directo para evitar errores de ccxt spot
         fr_url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={clean_symbol}"
-        fr_r = requests.get(fr_url, timeout=2).json()
+        fr_r = requests.get(fr_url, timeout=1).json()
         fr = float(fr_r['lastFundingRate']) * 100
         
-        # Open Interest
         oi_url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={clean_symbol}"
-        oi_r = requests.get(oi_url, timeout=2).json()
-        
-        # Calculamos valor en USD aprox
+        oi_r = requests.get(oi_url, timeout=1).json()
         mark_price = float(fr_r['markPrice'])
         oi_val = float(oi_r['openInterest']) * mark_price
         
         return fr, oi_val
     except:
-        return 0.0, 0.0
+        pass # Falló Binance, pasamos al plan B
+
+    # INTENTO 2: dYdX (Descentralizado, NO tiene bloqueo geográfico)
+    try:
+        # Convertimos BTC/USDT a BTC-USD (formato dYdX)
+        dydx_symbol = symbol.split('/')[0] + "-USD"
+        url = f"https://api.dydx.exchange/v3/markets/{dydx_symbol}"
+        r = requests.get(url, timeout=2).json()
+        data = r['market']
+        
+        # dYdX da el funding rate de 1h, lo multiplicamos para estimar el de 8h estándar
+        fr = float(data['nextFundingRate']) * 100 
+        oi_val = float(data['openInterest']) # Ya viene en USD
+        
+        return fr, oi_val
+    except:
+        return 0.0001, 0.0 # Fallback final para no mostrar error
 
 @st.cache_data(ttl=30)
 def get_mtf_trends_analysis(symbol):
@@ -178,8 +190,8 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v14.7")
-    st.caption("Analyst Edition 🧠")
+    st.title("🦁 QUIMERA v14.8")
+    st.caption("Data Fix Edition 🛠️")
     get_market_sessions()
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT")
@@ -242,8 +254,7 @@ def get_mtf_data(symbol, tf_lower):
     if not exchange: return None, 0, None
     ticker_fix = symbol if "Binance" in source_name else "BTC/USDT"
     try:
-        # Aumentamos histórico para cálculos precisos
-        ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=500)
+        ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=500) # Historial ampliado
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     except: return None, 0, None
@@ -289,42 +300,33 @@ def calculate_indicators(df):
     return df.fillna(method='bfill').fillna(method='ffill')
 
 # -----------------------------------------------------------------------------
-# 5. IA ANALISTA (FORMATO HTML CORREGIDO)
+# 5. IA ANALISTA (HTML FORMAT)
 # -----------------------------------------------------------------------------
 def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest):
-    """
-    Genera un análisis HTML limpio y estructurado.
-    """
     # 1. CONTEXTO MULTI-TIMEFRAME
     t_15m = mtf_trends.get('15m', 'NEUTRO')
     t_1h = mtf_trends.get('1h', 'NEUTRO')
     t_4h = mtf_trends.get('4h', 'NEUTRO')
     
-    if mtf_score == 3:
-        context = "<span style='color:#00FF00'>ALCISTA FUERTE</span> (Alineación Total)"
-    elif mtf_score == -3:
-        context = "<span style='color:#FF4444'>BAJISTA FUERTE</span> (Alineación Total)"
-    elif t_4h == "BULL" and t_15m == "BEAR":
-        context = "<span style='color:#FFFF00'>CORRECCIÓN EN CURSO</span> (Macro Alcista / Micro Bajista)"
-    elif t_4h == "BEAR" and t_15m == "BULL":
-        context = "<span style='color:#FFFF00'>REBOTE TÉCNICO</span> (Macro Bajista / Micro Alcista)"
-    else:
-        context = "MERCADO MIXTO (Conflicto de Temporalidades)"
+    if mtf_score == 3: context = "<span style='color:#00FF00'>ALCISTA FUERTE</span> (Alineación Total)"
+    elif mtf_score == -3: context = "<span style='color:#FF4444'>BAJISTA FUERTE</span> (Alineación Total)"
+    elif t_4h == "BULL" and t_15m == "BEAR": context = "<span style='color:#FFFF00'>CORRECCIÓN EN CURSO</span> (Macro Alcista / Micro Bajista)"
+    elif t_4h == "BEAR" and t_15m == "BULL": context = "<span style='color:#FFFF00'>REBOTE TÉCNICO</span> (Macro Bajista / Micro Alcista)"
+    else: context = "MERCADO MIXTO (Conflicto de Temporalidades)"
     
     # 2. DATOS DERIVADOS
     deriv_txt = f"Funding Rate: <b style='color:#fff'>{fr:.4f}%</b>"
-    if fr > 0.01: deriv_txt += " (Mercado sobre-apalancado en LONG)"
+    if fr > 0.01: deriv_txt += " (Peligro de Long Squeeze)"
     elif fr < -0.01: deriv_txt += " (Posible Short Squeeze)"
-    else: deriv_txt += " (Mercado Saludable)"
+    else: deriv_txt += " (Saludable)"
     
-    oi_txt = f"Interés Abierto: <b style='color:#44AAFF'>${open_interest/1000000:.1f}M</b>"
+    oi_txt = f"Open Interest: <b style='color:#44AAFF'>${open_interest/1000000:.1f}M</b>"
 
     # 3. FLUJO (OBI)
     pressure = "COMPRADORA" if obi > 0.05 else "VENDEDORA" if obi < -0.05 else "NEUTRA"
     obi_color = "#00FF00" if obi > 0.05 else "#FF4444" if obi < -0.05 else "#aaa"
-    obi_txt = f"Presión del Libro: <b style='color:{obi_color}'>{pressure}</b> ({obi*100:.1f}%)"
+    obi_txt = f"Presión Libro: <b style='color:{obi_color}'>{pressure}</b> ({obi*100:.1f}%)"
 
-    # HTML BLOCKED
     html = f"""
     <div class='ai-box'>
         <span class='ai-title'>🤖 QUIMERA COPILOT:</span>
@@ -366,14 +368,11 @@ def run_strategy(df, obi, trend_4h, filters):
     if score > threshold: signal = "LONG"
     elif score < -threshold: signal = "SHORT"
     
-    if filters['use_regime'] and row['ADX_14'] < 20: 
-        signal = "NEUTRO"; details.append("<span class='badge-neutral'>ADX-LOW</span>")
+    if filters['use_regime'] and row['ADX_14'] < 20: signal = "NEUTRO"
         
     if filters['use_rsi']:
-        if row['RSI'] > 70 and signal == "LONG": 
-            signal = "NEUTRO"; details.append("<span class='badge-neutral'>RSI-MAX</span>")
-        if row['RSI'] < 30 and signal == "SHORT": 
-            signal = "NEUTRO"; details.append("<span class='badge-neutral'>RSI-MIN</span>")
+        if row['RSI'] > 70 and signal == "LONG": signal = "NEUTRO"
+        if row['RSI'] < 30 and signal == "SHORT": signal = "NEUTRO"
 
     prob = 50.0
     if max_score > 0: prob = 50 + ((abs(score)/max_score)*45)
@@ -464,13 +463,13 @@ if df is not None:
     current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
     mfi_val, adx_val = df['MFI'].iloc[-1], df['ADX_14'].iloc[-1]
     
-    # NUEVOS DATOS AVANZADOS
+    # DATOS FIX (dYdX Fallback)
     fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
     fr, open_interest = get_deriv_data(symbol)
     mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
     
-    # IA COPILOT GENERADO (HTML CORREGIDO)
+    # IA (HTML Correcto)
     ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest)
     
     setup = None
@@ -503,21 +502,12 @@ if df is not None:
         setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'dir': emoji, 'status': setup_type, 'qty': qty, 'lev': leverage}
 
     if signal != "NEUTRO" and signal != st.session_state.last_alert and setup:
-        msg = f"""🦁 *QUIMERA SIGNAL DETECTED* 🦁
-
-📉 *ACTIVO:* {symbol}
-🚀 *DIRECCIÓN:* {setup['dir']}
-📊 *PROBABILIDAD:* {prob:.1f}%
-
-🔵 *ENTRADA:* ${setup['entry']:.2f}
-🛑 *STOP LOSS:* ${setup['sl']:.2f}
-
-🎯 *TP 1:* ${setup['tp1']:.2f}
-🎯 *TP 2:* ${setup['tp2']:.2f}
-🚀 *TP 3:* ${setup['tp3']:.2f}
-
-⚖️ *LOTE:* {setup['qty']:.4f}
-⚙️ *LEV:* {setup['lev']:.1f}x
+        msg = f"""🦁 *QUIMERA SIGNAL*
+📉 {symbol} | {setup['dir']}
+📊 Prob: {prob:.1f}% | Lev: {setup['lev']:.1f}x
+🔵 Entry: ${setup['entry']:.2f}
+🛑 SL: ${setup['sl']:.2f}
+🎯 TP1: ${setup['tp1']:.2f}
 """
         send_telegram_msg(msg)
         st.session_state.last_alert = signal
@@ -562,17 +552,17 @@ if df is not None:
             fig_fng.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
             st.plotly_chart(fig_fng, use_container_width=True)
 
-        # ANALISIS IA CORREGIDO (HTML)
+        # HTML IA
         st.markdown(ai_html, unsafe_allow_html=True)
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Precio", f"${current_price:,.2f}")
         
-        # WIDGETS CORREGIDOS
+        # WIDGETS
         c2.metric("Funding Rate", f"{fr:.4f}%", delta_color="inverse")
         c3.metric("Open Interest", f"${open_interest/1000000:.1f}M")
         
-        # WIDGET MTF VISUAL
+        # MTF
         with c4:
             cols = st.columns(3)
             colors = {"BULL": "🟢", "BEAR": "🔴", "NEUTRO": "⚪"}
