@@ -10,12 +10,12 @@ from datetime import datetime
 import time
 import numpy as np
 import os
-import feedparser # LIBRERÍA NUEVA PARA NOTICIAS
+import feedparser
 
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v9.0 News", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v9.1 Nitro", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -43,7 +43,6 @@ st.markdown("""
         background-color: #223344; border-left: 5px solid #44AAFF; padding: 15px; border-radius: 5px; margin-bottom: 15px; font-family: monospace;
     }
     
-    /* ESTILO NOTICIAS */
     .news-box {
         background-color: #111; border: 1px solid #333; padding: 15px; border-radius: 10px; margin-bottom: 15px;
     }
@@ -66,11 +65,11 @@ if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 if 'balance' not in st.session_state: st.session_state.balance = 10000.0
 
 # -----------------------------------------------------------------------------
-# 2. CONFIGURACIÓN (SIDEBAR MODULAR)
+# 2. CONFIGURACIÓN (SIDEBAR)
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v9.0")
-    st.caption("News Feed Edition 📰")
+    st.title("🦁 QUIMERA v9.1")
+    st.caption("Nitro Edition ⛽")
     
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
@@ -107,19 +106,14 @@ def init_exchange():
 
 exchange, source_name = init_exchange()
 
-# --- MOTOR DE NOTICIAS (NUEVO) ---
-@st.cache_data(ttl=300) # Cache 5 min para no saturar
+@st.cache_data(ttl=300)
 def get_crypto_news():
     rss_url = "https://cointelegraph.com/rss"
     try:
         feed = feedparser.parse(rss_url)
         news_items = []
-        for entry in feed.entries[:3]: # Solo las 3 ultimas
-            news_items.append({
-                "title": entry.title,
-                "link": entry.link,
-                "published": entry.published_parsed
-            })
+        for entry in feed.entries[:3]:
+            news_items.append({"title": entry.title, "link": entry.link, "published": entry.published_parsed})
         return news_items
     except: return []
 
@@ -139,8 +133,7 @@ def get_mtf_data(symbol, tf_lower):
         ohlcv_4h = exchange.fetch_ohlcv(ticker_fix, '4h', limit=50)
         df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_4h['EMA_50'] = ta.ema(df_4h['close'], length=50)
-        last_4h = df_4h.iloc[-1]
-        if last_4h['close'] > last_4h['EMA_50']: trend_4h = "BULLISH"
+        if df_4h['close'].iloc[-1] > df_4h['EMA_50'].iloc[-1]: trend_4h = "BULLISH"
         else: trend_4h = "BEARISH"
     except: pass
 
@@ -154,7 +147,7 @@ def get_mtf_data(symbol, tf_lower):
     return df, obi, trend_4h
 
 # -----------------------------------------------------------------------------
-# 4. CAPA LÓGICA (INDICADORES Y SEÑAL)
+# 4. CAPA LÓGICA
 # -----------------------------------------------------------------------------
 def calculate_indicators(df):
     if df is None: return None
@@ -174,6 +167,9 @@ def calculate_indicators(df):
     adx = ta.adx(df['high'], df['low'], df['close'], length=14)
     df = pd.concat([df, adx], axis=1)
     
+    # --- NUEVO INDICADOR GASOLINA (MFI) ---
+    df['MFI'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
+    
     return df.fillna(method='bfill').fillna(method='ffill')
 
 def generate_ai_analysis(row, trend_4h, obi, signal, prob):
@@ -181,17 +177,19 @@ def generate_ai_analysis(row, trend_4h, obi, signal, prob):
     if trend_4h == "BULLISH": analysis.append("Estructura Macro (4H): ALCISTA.")
     elif trend_4h == "BEARISH": analysis.append("Estructura Macro (4H): BAJISTA.")
     
+    # Analisis de Gasolina
+    mfi = row['MFI']
+    if mfi > 60: analysis.append("⛽ Mucha gasolina (Dinero entrando).")
+    elif mfi < 40: analysis.append("🪫 Poca gasolina (Dinero saliendo).")
+    
     if row['ADX_14'] > 25: analysis.append(f"Tendencia fuerte (ADX {row['ADX_14']:.1f}).")
-    else: analysis.append(f"Mercado en Rango (ADX {row['ADX_14']:.1f}).")
-        
-    if obi > 0.1: analysis.append("Interés comprador en Order Book.")
-    elif obi < -0.1: analysis.append("Muro de ventas detectado.")
+    else: analysis.append(f"Mercado lateral.")
         
     if signal != "NEUTRO":
         direction = "SUBIDA" if signal == "LONG" else "BAJADA"
         analysis.append(f"🎯 CONCLUSIÓN: Probabilidad {prob:.1f}% de {direction}.")
     else:
-        analysis.append("⏳ CONCLUSIÓN: Mercado indeciso. Esperar.")
+        analysis.append("⏳ CONCLUSIÓN: Mercado indeciso.")
         
     return " ".join(analysis)
 
@@ -214,12 +212,12 @@ def run_strategy(df, obi, trend_4h, filters):
 
     if filters['use_vwap']:
         max_score += 1
-        if row['close'] > row['VWAP']: score += 1; reasons.append("VWAP Support")
+        if row['close'] > row['VWAP']: score += 1; reasons.append("VWAP")
         else: score -= 1
         
     if filters['use_obi']:
         max_score += 1
-        if obi > 0.05: score += 1; reasons.append("OrderBook Bull")
+        if obi > 0.05: score += 1; reasons.append("OrderBook")
         elif obi < -0.05: score -= 1
     
     threshold = max_score * 0.4
@@ -227,12 +225,13 @@ def run_strategy(df, obi, trend_4h, filters):
     if score > threshold: signal = "LONG"
     elif score < -threshold: signal = "SHORT"
     
+    # Vetos
     if filters['use_rsi'] and (row['RSI'] > 70 and signal == "LONG"): signal = "NEUTRO"
     if filters['use_rsi'] and (row['RSI'] < 30 and signal == "SHORT"): signal = "NEUTRO"
-    if filters['use_regime'] and row['ADX_14'] < 20: signal = "NEUTRO"; reasons = ["Rango (ADX < 20)"]
+    if filters['use_regime'] and row['ADX_14'] < 20: signal = "NEUTRO"
     
-    if filters['use_mtf'] and signal == "LONG" and trend_4h == "BEARISH": signal = "NEUTRO"; reasons = ["Contra 4H"]
-    if filters['use_mtf'] and signal == "SHORT" and trend_4h == "BULLISH": signal = "NEUTRO"; reasons = ["Contra 4H"]
+    if filters['use_mtf'] and signal == "LONG" and trend_4h == "BEARISH": signal = "NEUTRO"
+    if filters['use_mtf'] and signal == "SHORT" and trend_4h == "BULLISH": signal = "NEUTRO"
 
     prob = 50.0
     if max_score > 0: prob = 50 + ((abs(score)/max_score)*45)
@@ -240,53 +239,33 @@ def run_strategy(df, obi, trend_4h, filters):
     return signal, reasons, row['ATR'], prob
 
 # -----------------------------------------------------------------------------
-# 5. PAPER TRADING & CSV
+# 5. GESTIÓN PAPER TRADING
 # -----------------------------------------------------------------------------
 def load_trades():
-    if not os.path.exists(CSV_FILE):
-        return pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
+    if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
     try:
         df = pd.read_csv(CSV_FILE)
         if df.empty: return pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
         return df
-    except:
-        return pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
+    except: return pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
 
 def save_trades(df):
     df.to_csv(CSV_FILE, index=False)
 
 def execute_trade(type, entry, sl, tp1, tp2, tp3, size, atr):
     df = load_trades()
-    new_trade = {
-        "id": int(time.time()),
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "symbol": symbol,
-        "type": type,
-        "entry": entry,
-        "size": size,
-        "sl": sl,
-        "tp1": tp1,
-        "tp2": tp2,
-        "tp3": tp3,
-        "status": "OPEN",
-        "pnl": 0.0,
-        "reason": "Entry",
-        "candles_held": 0,
-        "atr_entry": atr
-    }
-    df = pd.concat([pd.DataFrame([new_trade]), df], ignore_index=True)
+    new = {"id": int(time.time()), "time": datetime.now().strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "type": type, "entry": entry, "size": size, "sl": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3, "status": "OPEN", "pnl": 0.0, "reason": "Entry", "candles_held": 0, "atr_entry": atr}
+    df = pd.concat([pd.DataFrame([new]), df], ignore_index=True)
     save_trades(df)
-    return new_trade
+    return new
 
 def manage_open_positions(current_price):
     df = load_trades()
     if df.empty: return
-    
-    open_trades_idx = df.index[df['status'] == "OPEN"].tolist()
-    if not open_trades_idx: return
-
+    open_idx = df.index[df['status'] == "OPEN"].tolist()
     updated = False
-    for idx in open_trades_idx:
+    
+    for idx in open_idx:
         row = df.loc[idx]
         close_reason = ""
         pnl = 0
@@ -304,25 +283,19 @@ def manage_open_positions(current_price):
                     if new_sl > row['sl']: df.at[idx, 'sl'] = new_sl
                 if use_breakeven and current_price > (row['entry'] * 1.015):
                      if row['sl'] < row['entry']: df.at[index, 'sl'] = row['entry']
-                
-                if current_price >= row['tp3']: close_reason = "TP3 🚀"; pnl = (row['tp3']-row['entry'])*row['size']
-                elif current_price <= row['sl']: close_reason = "SL 🛑"; pnl = (row['sl']-row['entry'])*row['size']
-            
-            else: 
+                if current_price >= row['tp3']: close_reason="TP3 🚀"; pnl=(row['tp3']-row['entry'])*row['size']
+                elif current_price <= row['sl']: close_reason="SL 🛑"; pnl=(row['sl']-row['entry'])*row['size']
+            else:
                 if use_trailing:
                     new_sl = current_price + (row['atr_entry'] * 1.5)
                     if new_sl < row['sl']: df.at[idx, 'sl'] = new_sl
                 if use_breakeven and current_price < (row['entry'] * 0.985):
                      if row['sl'] > row['entry']: df.at[index, 'sl'] = row['entry']
-
-                if current_price <= row['tp3']: close_reason = "TP3 🚀"; pnl = (row['entry']-row['tp3'])*row['size']
-                elif current_price >= row['sl']: close_reason = "SL 🛑"; pnl = (row['entry']-row['sl'])*row['size']
+                if current_price <= row['tp3']: close_reason="TP3 🚀"; pnl=(row['entry']-row['tp3'])*row['size']
+                elif current_price >= row['sl']: close_reason="SL 🛑"; pnl=(row['entry']-row['sl'])*row['size']
 
         if close_reason:
-            df.at[idx, 'status'] = "CLOSED"
-            df.at[idx, 'pnl'] = pnl
-            df.at[idx, 'reason'] = close_reason
-            st.toast(f"Cierre: {close_reason}")
+            df.at[idx, 'status'] = "CLOSED"; df.at[idx, 'pnl'] = pnl; df.at[idx, 'reason'] = close_reason
             send_telegram_msg(f"💰 CIERRE {symbol}: {close_reason}\nPnL: ${pnl:.2f}")
             updated = True
 
@@ -350,9 +323,10 @@ if df is not None:
     
     signal, reasons, atr, prob = run_strategy(df, obi, trend_4h, filters)
     current_price = df['close'].iloc[-1]
+    mfi_val = df['MFI'].iloc[-1] # Valor Gasolina
     
     ai_narrative = generate_ai_analysis(df.iloc[-1], trend_4h, obi, signal, prob)
-    news = get_crypto_news() # OBTENER NOTICIAS
+    news = get_crypto_news()
     
     setup = None
     calc_dir = signal 
@@ -367,12 +341,10 @@ if df is not None:
         sl_dist = atr * 1.5
         risk = sl_dist
         if calc_dir == "LONG":
-            sl = current_price - sl_dist
-            tp1, tp2, tp3 = current_price+risk, current_price+(risk*2), current_price+(risk*3.5)
+            sl, tp1, tp2, tp3 = current_price-sl_dist, current_price+risk, current_price+(risk*2), current_price+(risk*3.5)
             emoji = "⬆️ LONG"
         else:
-            sl = current_price + sl_dist
-            tp1, tp2, tp3 = current_price-risk, current_price-(risk*2), current_price-(risk*3.5)
+            sl, tp1, tp2, tp3 = current_price+sl_dist, current_price-risk, current_price-(risk*2), current_price-(risk*3.5)
             emoji = "⬇️ SHORT"
         
         setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'dir': emoji, 'status': setup_type}
@@ -380,7 +352,7 @@ if df is not None:
     if signal != "NEUTRO" and signal != st.session_state.last_alert and setup:
         msg = f"""🦁 *QUIMERA SIGNAL: {signal}*
 Activo: {symbol}
-Prob: {prob:.1f}%
+Prob: {prob:.1f}% | MFI: {mfi_val:.0f}
 
 🔥 *OPERACIÓN: {setup['dir']}*
 
@@ -401,7 +373,6 @@ Prob: {prob:.1f}%
     tab1, tab2 = st.tabs(["📊 LIVE COMMAND", "🧪 PAPER TRADING"])
     
     with tab1:
-        # --- WIDGET DE NOTICIAS (NUEVO) ---
         if news:
             st.markdown("### 📰 MARKET FLASH")
             news_html = "<div class='news-box'>"
@@ -411,17 +382,19 @@ Prob: {prob:.1f}%
                 news_html += f"<div class='news-item'><span class='news-time'>{t_str}</span> <a href='{n['link']}' target='_blank' class='news-link'>{n['title']}</a></div>"
             news_html += "</div>"
             st.markdown(news_html, unsafe_allow_html=True)
-        else:
-            st.caption("Sin noticias recientes.")
 
-        # COPILOT Y DATOS
         st.markdown(f"<div class='ai-box'>🤖 <b>QUIMERA COPILOT:</b><br>{ai_narrative}</div>", unsafe_allow_html=True)
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Precio", f"${current_price:,.2f}")
-        c2.metric("Tendencia 4H", trend_4h, delta="Bullish" if trend_4h=="BULLISH" else "Bearish", delta_color="normal")
+        c2.metric("Tendencia 4H", trend_4h, delta="Bullish" if trend_4h=="BULLISH" else "Bearish")
         c3.metric("OBI", f"{obi:.1%}")
-        c4.metric("Probabilidad", f"{prob:.1f}%")
+        
+        # METRICA DE GASOLINA (MFI)
+        gas_state = "⚖️ Neutro"
+        if mfi_val > 60: gas_state = "⛽ Tanque Lleno"
+        elif mfi_val < 40: gas_state = "🪫 Reserva"
+        c4.metric("GASOLINA (MFI)", f"{mfi_val:.0f}", gas_state)
 
         if setup:
             if setup['status'] == "CONFIRMED":
@@ -460,6 +433,7 @@ Prob: {prob:.1f}%
             fig.add_hline(y=setup['tp1'], line_dash="dot", line_color="green", row=1, col=1)
             fig.add_hline(y=setup['sl'], line_dash="dot", line_color="red", row=1, col=1)
 
+        # Graficar MFI en lugar de RSI si se prefiere, o ambos. Dejamos RSI abajo y añadimos nota.
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['RSI'], line=dict(color='purple'), name='RSI'), row=2, col=1)
         fig.add_hline(y=70, row=2, col=1); fig.add_hline(y=30, row=2, col=1)
         fig.update_layout(height=500, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
