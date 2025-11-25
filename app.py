@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v16.0 Ironclad", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v16.0 Production", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -71,11 +71,14 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
-# API KEY COINGLASS (Respaldo)
-COINGLASS_API_KEY = "1d4579f4c59149c6b6a1d83494a4f67c"
+# CLAVE API (Fallback Hardcoded si no está en secrets)
+try:
+    COINGLASS_API_KEY = st.secrets.get("COINGLASS_KEY", "1d4579f4c59149c6b6a1d83494a4f67c")
+except:
+    COINGLASS_API_KEY = "1d4579f4c59149c6b6a1d83494a4f67c"
 
 # -----------------------------------------------------------------------------
-# 2. MOTOR DE DATOS (CCXT POWERED)
+# 2. MOTOR DE DATOS (FUNCIONES ROBUSTAS)
 # -----------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=COLUMNS_DB)
@@ -109,21 +112,30 @@ def get_market_sessions():
         css_class = "clock-open" if is_open else "clock-closed"
         st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{status_icon}</span></div>", unsafe_allow_html=True)
 
-@st.cache_data(ttl=60)
+# --- FUNCIÓN RECUPERADA Y CORREGIDA ---
+@st.cache_data(ttl=3600) 
+def get_fear_and_greed():
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get("https://api.alternative.me/fng/", headers=headers, timeout=5)
+        data = r.json()['data'][0]
+        return int(data['value']), data['value_classification']
+    except: return 50, "Neutral"
+# -------------------------------------
+
+@st.cache_data(ttl=120)
 def get_deriv_data(symbol):
-    """
-    Obtiene Funding Rate y Open Interest usando CCXT (Librería Profesional)
-    para evitar bloqueos HTTP simples.
-    """
-    # 1. Intento con CoinGlass (Si funciona la clave)
+    base_coin = symbol.split('/')[0]
+    headers_browser = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+    
+    # 1. COINGLASS
     if COINGLASS_API_KEY:
         try:
-            base_coin = symbol.split('/')[0]
-            headers = {"coinglassSecret": COINGLASS_API_KEY}
+            headers_cg = {"coinglassSecret": COINGLASS_API_KEY}
             url_oi = f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base_coin}"
-            r_oi = requests.get(url_oi, headers=headers, timeout=2).json()
+            r_oi = requests.get(url_oi, headers=headers_cg, timeout=3).json()
             url_fr = f"https://open-api.coinglass.com/public/v2/funding?symbol={base_coin}"
-            r_fr = requests.get(url_fr, headers=headers, timeout=2).json()
+            r_fr = requests.get(url_fr, headers=headers_cg, timeout=3).json()
             
             total_oi = 0.0
             avg_fr = 0.0
@@ -136,40 +148,25 @@ def get_deriv_data(symbol):
                     if ex['exchangeName'] == 'Binance':
                         if 'uMarginList' in ex and len(ex['uMarginList']) > 0: avg_fr = ex['uMarginList'][0]['rate']
                         break
-            
             if total_oi > 0: return avg_fr, total_oi, "CoinGlass"
         except: pass
 
-    # 2. Intento con CCXT (Binance Futures)
+    # 2. BYBIT
     try:
-        # Iniciamos instancia específica de Futuros
-        exchange_f = ccxt.binanceusdm({'enableRateLimit': True})
-        ticker = exchange_f.fetch_ticker(symbol)
-        
-        # Funding Rate
-        fr = float(ticker['info']['lastFundingRate']) * 100
-        
-        # Open Interest (A veces requiere endpoint separado)
-        # Intentamos calcularlo aproximado por volumen si no hay endpoint publico directo accesible
-        # Pero CCXT suele tenerlo en fetch_ticker o fetch_open_interest
-        try:
-            oi_data = exchange_f.fetch_open_interest(symbol)
-            oi_val = float(oi_data['openInterestValue']) # Valor en USDT
-        except:
-            # Fallback si fetch_open_interest falla: estimar con volumen 24h * ratio
-            oi_val = float(ticker['quoteVolume']) * 0.2 
-            
-        return fr, oi_val, "BinanceAPI"
+        url = f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_coin}USDT"
+        r = requests.get(url, headers=headers_browser, timeout=3).json()
+        if r['retCode'] == 0:
+            info = r['result']['list'][0]
+            return float(info['fundingRate']) * 100, float(info['openInterestValue']), "Bybit"
     except: pass
 
-    # 3. Intento con CCXT (Kraken Futures - Muy permisivo)
+    # 3. DYDX
     try:
-        exchange_k = ccxt.krakenfutures()
-        # Kraken usa simbolos distintos, ej: PI_XBTUSD
-        ticker_k = exchange_k.fetch_ticker("PF_XBTUSD") # Hardcoded BTC para fallback
-        fr = float(ticker_k['info'].get('fundingRate', 0)) * 100
-        oi_val = float(ticker_k['info'].get('openInterest', 0))
-        return fr, oi_val, "KrakenFut"
+        dydx_symbol = f"{base_coin}-USD"
+        url = f"https://api.dydx.exchange/v3/markets/{dydx_symbol}"
+        r = requests.get(url, headers=headers_browser, timeout=3).json()
+        market = r['market']
+        return float(market['nextFundingRate']) * 100, float(market['openInterest']), "dYdX"
     except: pass
 
     return 0.0, 0.0, "Error"
@@ -307,10 +304,9 @@ def calculate_indicators(df):
     return df.fillna(method='bfill').fillna(method='ffill')
 
 # -----------------------------------------------------------------------------
-# 5. IA ANALISTA (SYSTEM LOGIC, NOT AI)
+# 5. IA ANALISTA
 # -----------------------------------------------------------------------------
 def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src):
-    # 1. CONTEXTO MULTI-TIMEFRAME
     t_15m = mtf_trends.get('15m', 'NEUTRO')
     t_1h = mtf_trends.get('1h', 'NEUTRO')
     t_4h = mtf_trends.get('4h', 'NEUTRO')
@@ -321,7 +317,6 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     elif t_4h == "BEAR" and t_15m == "BULL": context = "<span style='color:#FFFF00'>REBOTE TÉCNICO</span> (Macro Bajista / Micro Alcista)"
     else: context = "MERCADO MIXTO (Conflicto de Temporalidades)"
     
-    # 2. DATOS DERIVADOS
     deriv_txt = f"Funding Rate: <b style='color:#fff'>{fr:.4f}%</b>"
     if fr > 0.01: deriv_txt += " (Long Squeeze Risk)"
     elif fr < -0.01: deriv_txt += " (Short Squeeze Risk)"
@@ -333,18 +328,13 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     
     oi_txt = f"Interés Abierto: <b style='color:#44AAFF'>{oi_fmt}</b>"
 
-    # 3. MOMENTO (TSI / MFI / ADX)
     mfi = row['MFI']
     adx = row['ADX_14']
     tsi = row['TSI']
-    
-    gas_status = "LLENO" if mfi > 60 else "RESERVA" if mfi < 40 else "MEDIO"
+    gas_status = "LLENO (Alta Demanda)" if mfi > 60 else "RESERVA (Baja Demanda)" if mfi < 40 else "MEDIO"
     gas_color = "#00FF00" if mfi > 60 else "#FF4444" if mfi < 40 else "#FFF"
-    
     tsi_status = "ALCISTA" if tsi > 0 else "BAJISTA"
-    tsi_color = "#00FF00" if tsi > 0 else "#FF4444"
-    
-    mom_txt = f"Gasolina (MFI): <b style='color:{gas_color}'>{gas_status}</b>. ADX: {adx:.1f}. TSI: <b style='color:{tsi_color}'>{tsi_status}</b> ({tsi:.2f})."
+    mom_txt = f"Gasolina (MFI): <b style='color:{gas_color}'>{gas_status}</b>. ADX: {adx:.1f}. TSI: {tsi_status} ({tsi:.2f})."
 
     pressure = "COMPRADORA" if obi > 0.05 else "VENDEDORA" if obi < -0.05 else "NEUTRA"
     obi_color = "#00FF00" if obi > 0.05 else "#FF4444" if obi < -0.05 else "#aaa"
@@ -669,6 +659,9 @@ if df is not None:
         else: st.info("Esperando estructura de mercado clara...")
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
+        # -----------------------------------------------------------
+        # CORRECCIÓN AQUI: Se elimina la duplicación de "name="
+        # -----------------------------------------------------------
         fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name=f'{source_name} Data'), row=1, col=1)
         if use_vwap: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
         last_pivot, last_s1, last_r1 = df.iloc[-1]['PIVOT'], df.iloc[-1]['S1'], df.iloc[-1]['R1']
@@ -681,7 +674,6 @@ if df is not None:
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['RSI'], line=dict(color='purple'), name='RSI'), row=2, col=1)
         fig.add_hline(y=70, row=2, col=1); fig.add_hline(y=30, row=2, col=1)
         
-        # Titulo dinámico
         fig.update_layout(title=f"Chart Source: {source_name}", template="plotly_dark", height=500, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
