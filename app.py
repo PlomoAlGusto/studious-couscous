@@ -14,7 +14,7 @@ import os
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v6.3 Oracle", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v6.3.1", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -38,7 +38,6 @@ st.markdown("""
     .header-confirmed-short { color: #FF4444; font-size: 20px; font-weight: 900; border-bottom: 1px solid #333; padding-bottom: 10px; }
     .header-potential { color: #FFFF00; font-size: 18px; font-weight: bold; border-bottom: 1px dashed #555; padding-bottom: 10px; }
     
-    /* Estilo para el nuevo Copilot */
     .ai-box {
         background-color: #223344;
         border-left: 5px solid #44AAFF;
@@ -50,21 +49,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# GESTIÓN DE ARCHIVOS (PERSISTENCIA CSV)
-CSV_FILE = 'paper_trades.csv'
-if not os.path.exists(CSV_FILE):
-    df_empty = pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
-    df_empty.to_csv(CSV_FILE, index=False)
-
+# VARIABLES DE ESTADO
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 if 'balance' not in st.session_state: st.session_state.balance = 10000.0
+
+CSV_FILE = 'paper_trades.csv'
 
 # -----------------------------------------------------------------------------
 # 2. CONFIGURACIÓN (SIDEBAR MODULAR)
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v6.3")
-    st.caption("Oracle Edition")
+    st.title("🦁 QUIMERA v6.3.1")
+    st.caption("Oracle Edition (Fixed)")
     
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
@@ -106,14 +102,12 @@ def get_mtf_data(symbol, tf_lower):
     if not exchange: return None, 0, None
     ticker_fix = symbol if "Binance" in source_name else "BTC/USDT"
     
-    # 1. Datos Principales
     try:
         ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=200)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     except: return None, 0, None
 
-    # 2. Datos Macro (4h)
     trend_4h = "NEUTRO"
     try:
         ohlcv_4h = exchange.fetch_ohlcv(ticker_fix, '4h', limit=50)
@@ -124,7 +118,6 @@ def get_mtf_data(symbol, tf_lower):
         else: trend_4h = "BEARISH"
     except: pass
 
-    # 3. OBI Live
     obi = 0
     try:
         book = exchange.fetch_order_book(ticker_fix, limit=20)
@@ -157,34 +150,22 @@ def calculate_indicators(df):
     
     return df.fillna(method='bfill').fillna(method='ffill')
 
-# --- NUEVO MOTOR DE ANÁLISIS DE IA ---
 def generate_ai_analysis(row, trend_4h, obi, signal, prob):
     analysis = []
+    if trend_4h == "BULLISH": analysis.append("Estructura Macro (4H): ALCISTA.")
+    elif trend_4h == "BEARISH": analysis.append("Estructura Macro (4H): BAJISTA.")
     
-    # 1. Análisis de Estructura
-    if trend_4h == "BULLISH":
-        analysis.append("La estructura macro (4H) es ALCISTA, lo que favorece compras.")
-    elif trend_4h == "BEARISH":
-        analysis.append("La estructura macro (4H) es BAJISTA, presión vendedora dominante.")
-    
-    # 2. Análisis de Fuerza (ADX)
-    if row['ADX_14'] > 25:
-        analysis.append(f"El mercado tiene una tendencia fuerte (ADX {row['ADX_14']:.1f}), movimientos explosivos probables.")
-    else:
-        analysis.append(f"Mercado en rango o consolidación (ADX {row['ADX_14']:.1f}). Peligro de señales falsas.")
+    if row['ADX_14'] > 25: analysis.append(f"Tendencia fuerte (ADX {row['ADX_14']:.1f}).")
+    else: analysis.append(f"Mercado en Rango (ADX {row['ADX_14']:.1f}).")
         
-    # 3. Análisis de Libro de Órdenes
-    if obi > 0.1:
-        analysis.append("Detecto fuerte interés comprador en el Order Book.")
-    elif obi < -0.1:
-        analysis.append("Detecto muro de ventas en el Order Book.")
+    if obi > 0.1: analysis.append("Interés comprador en Order Book.")
+    elif obi < -0.1: analysis.append("Muro de ventas detectado.")
         
-    # 4. Conclusión
     if signal != "NEUTRO":
         direction = "SUBIDA" if signal == "LONG" else "BAJADA"
-        analysis.append(f"🎯 CONCLUSIÓN: Alta probabilidad ({prob:.1f}%) de {direction}. El setup técnico está alineado.")
+        analysis.append(f"🎯 CONCLUSIÓN: Probabilidad {prob:.1f}% de {direction}.")
     else:
-        analysis.append("⏳ CONCLUSIÓN: El mercado está indeciso o los filtros no confirman. Mejor esperar.")
+        analysis.append("⏳ CONCLUSIÓN: Mercado indeciso. Esperar.")
         
     return " ".join(analysis)
 
@@ -233,11 +214,20 @@ def run_strategy(df, obi, trend_4h, filters):
     return signal, reasons, row['ATR'], prob
 
 # -----------------------------------------------------------------------------
-# 5. PAPER TRADING
+# 5. GESTIÓN CSV BLINDADA (AQUÍ ESTABA EL ERROR)
 # -----------------------------------------------------------------------------
-def load_trades():
-    if os.path.exists(CSV_FILE): return pd.read_csv(CSV_FILE)
+def get_empty_trades_df():
     return pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
+
+def load_trades():
+    if not os.path.exists(CSV_FILE):
+        return get_empty_trades_df()
+    try:
+        df = pd.read_csv(CSV_FILE)
+        if df.empty: return get_empty_trades_df()
+        return df
+    except:
+        return get_empty_trades_df() # Si el archivo está corrupto, devuelve vacío y no falla
 
 def save_trades(df):
     df.to_csv(CSV_FILE, index=False)
@@ -261,7 +251,8 @@ def execute_trade(type, entry, sl, tp1, tp2, tp3, size, atr):
         "candles_held": 0,
         "atr_entry": atr
     }
-    df = pd.concat([pd.DataFrame([new_trade]), df], ignore_index=True)
+    new_row = pd.DataFrame([new_trade])
+    df = pd.concat([new_row, df], ignore_index=True)
     save_trades(df)
     return new_trade
 
@@ -278,14 +269,12 @@ def manage_open_positions(current_price):
         close_reason = ""
         pnl = 0
         
-        # 1. Time Stop
         if use_time_stop:
             df.at[idx, 'candles_held'] += 1
             if df.at[idx, 'candles_held'] > 12: 
                 current_pnl = (current_price - row['entry']) if row['type'] == "LONG" else (row['entry'] - current_price)
                 if current_pnl <= 0: close_reason = "Time Stop ⏳"
         
-        # 2. Logic
         if not close_reason:
             if row['type'] == "LONG":
                 if use_trailing:
@@ -297,7 +286,7 @@ def manage_open_positions(current_price):
                 if current_price >= row['tp3']: close_reason = "TP3 🚀"; pnl = (row['tp3']-row['entry'])*row['size']
                 elif current_price <= row['sl']: close_reason = "SL 🛑"; pnl = (row['sl']-row['entry'])*row['size']
             
-            else: # SHORT
+            else: 
                 if use_trailing:
                     new_sl = current_price + (row['atr_entry'] * 1.5)
                     if new_sl < row['sl']: df.at[idx, 'sl'] = new_sl
@@ -340,10 +329,8 @@ if df is not None:
     signal, reasons, atr, prob = run_strategy(df, obi, trend_4h, filters)
     current_price = df['close'].iloc[-1]
     
-    # NUEVO COPILOT NARRATIVO
     ai_narrative = generate_ai_analysis(df.iloc[-1], trend_4h, obi, signal, prob)
     
-    # --- CÁLCULO DE SETUP ---
     setup = None
     calc_dir = signal 
     setup_type = "CONFIRMED" if signal != "NEUTRO" else "POTENTIAL"
@@ -359,19 +346,18 @@ if df is not None:
         if calc_dir == "LONG":
             sl = current_price - sl_dist
             tp1, tp2, tp3 = current_price+risk, current_price+(risk*2), current_price+(risk*3.5)
-            emoji = "⬆️ COMPRA"
+            emoji = "⬆️ LONG"
         else:
             sl = current_price + sl_dist
             tp1, tp2, tp3 = current_price-risk, current_price-(risk*2), current_price-(risk*3.5)
-            emoji = "⬇️ VENTA"
+            emoji = "⬇️ SHORT"
         
         setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'dir': emoji, 'status': setup_type}
 
-    # ALERTA TELEGRAM (RESTAURADA COMPLETA)
     if signal != "NEUTRO" and signal != st.session_state.last_alert and setup:
         msg = f"""🦁 *QUIMERA SIGNAL: {signal}*
 Activo: {symbol}
-Probabilidad: {prob:.1f}%
+Prob: {prob:.1f}%
 
 🔥 *OPERACIÓN: {setup['dir']}*
 
@@ -389,11 +375,9 @@ Probabilidad: {prob:.1f}%
     
     manage_open_positions(current_price)
     
-    # --- UI ---
     tab1, tab2 = st.tabs(["📊 LIVE COMMAND", "🧪 PAPER TRADING"])
     
     with tab1:
-        # CAJA IA EXTENDIDA
         st.markdown(f"<div class='ai-box'>🤖 <b>QUIMERA COPILOT:</b><br>{ai_narrative}</div>", unsafe_allow_html=True)
         
         c1, c2, c3, c4 = st.columns(4)
@@ -409,7 +393,7 @@ Probabilidad: {prob:.1f}%
                 btn_label = f"🚀 EJECUTAR {calc_dir}"
             else:
                 header_cls = "header-potential"
-                header_txt = f"⚠️ SETUP POTENCIAL: {setup['dir']}"
+                header_txt = f"⚠️ POTENCIAL: {setup['dir']}"
                 btn_label = f"⚠️ FORZAR ENTRADA"
 
             st.markdown(f"""
