@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v13.8 Chronos", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v13.9 Chronos", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -72,17 +72,39 @@ st.markdown("""
 # GESTIÓN DE ARCHIVOS
 CSV_FILE = 'paper_trades.csv'
 COLUMNS_DB = ["id", "time", "symbol", "type", "entry", "size", "leverage", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"]
+INITIAL_CAPITAL = 10000.0  # Capital inicial fijo
 
 if not os.path.exists(CSV_FILE):
     df_empty = pd.DataFrame(columns=COLUMNS_DB)
     df_empty.to_csv(CSV_FILE, index=False)
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
-if 'balance' not in st.session_state: st.session_state.balance = 10000.0
 
 # -----------------------------------------------------------------------------
 # 2. CONFIGURACIÓN (SIDEBAR MODULAR)
 # -----------------------------------------------------------------------------
+def load_trades():
+    if not os.path.exists(CSV_FILE): 
+        return pd.DataFrame(columns=COLUMNS_DB)
+    try:
+        df = pd.read_csv(CSV_FILE)
+        if 'leverage' not in df.columns: df['leverage'] = 1.0
+        return df
+    except: return pd.DataFrame(columns=COLUMNS_DB)
+
+def get_current_balance():
+    """Calcula el balance actual sumando el PnL cerrado al capital inicial."""
+    df = load_trades()
+    if df.empty: return INITIAL_CAPITAL
+    realized_pnl = df[df['status'] == 'CLOSED']['pnl'].sum()
+    return INITIAL_CAPITAL + realized_pnl
+
+def reset_account():
+    """Borra el historial y resetea la cuenta."""
+    df_empty = pd.DataFrame(columns=COLUMNS_DB)
+    df_empty.to_csv(CSV_FILE, index=False)
+    st.rerun()
+
 def get_market_sessions():
     now = datetime.now(timezone.utc)
     hour = now.hour
@@ -97,29 +119,42 @@ def get_market_sessions():
         st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{status_icon}</span></div>", unsafe_allow_html=True)
 
 with st.sidebar:
-    st.title("🦁 QUIMERA v13.8")
+    st.title("🦁 QUIMERA v13.9")
     st.caption("Chronos Edition ⏳")
     get_market_sessions()
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
+    
     with st.expander("🛡️ FILTROS DE ENTRADA", expanded=True):
         use_ema = st.checkbox("Tendencia Base (EMAs)", True)
         use_mtf = st.checkbox("Filtro Macro (4H Trend)", True)
         use_vwap = st.checkbox("Filtro VWAP (Institucional)", True)
         use_ichi = st.checkbox("Filtro Nube Ichimoku", False)
         use_regime = st.checkbox("Filtro Anti-Rango (ADX)", True)
+    
     with st.expander("🌊 MOMENTO Y VOLUMEN"):
         use_rsi = st.checkbox("RSI & Stoch", True)
         use_obi = st.checkbox("Order Book Imbalance", True)
+        
     with st.expander("💰 GESTIÓN DE RIESGO"):
-        account_size = st.number_input("Tamaño Cuenta ($)", value=1000.0)
-        risk_per_trade = st.slider("Riesgo (%)", 0.5, 5.0, 1.0)
+        # CÁLCULO DINÁMICO DEL BALANCE
+        current_balance = get_current_balance()
+        st.metric("Balance Disponible", f"${current_balance:,.2f}", delta=f"{current_balance-INITIAL_CAPITAL:.2f}")
+        
+        risk_per_trade = st.slider("Riesgo por Trade (%)", 0.5, 5.0, 1.0)
+        st.caption(f"Arriesgando: ${current_balance * (risk_per_trade/100):.2f}")
+        
     with st.expander("⚙️ SALIDAS"):
         use_trailing = st.checkbox("Trailing Stop", True)
         use_breakeven = st.checkbox("Breakeven (+1.5%)", True)
         use_time_stop = st.checkbox("Time Stop (12 Velas)", True)
+        
     auto_refresh = st.checkbox("🔄 AUTO-SCAN (60s)", False)
+    
+    st.divider()
+    if st.button("🔥 RESETEAR CUENTA"):
+        reset_account()
 
 # -----------------------------------------------------------------------------
 # 3. CAPA DE DATOS
@@ -293,17 +328,6 @@ def run_strategy(df, obi, trend_4h, filters):
 # -----------------------------------------------------------------------------
 # 5. GESTIÓN PAPER TRADING
 # -----------------------------------------------------------------------------
-def load_trades():
-    if not os.path.exists(CSV_FILE): 
-        return pd.DataFrame(columns=COLUMNS_DB)
-    try:
-        df = pd.read_csv(CSV_FILE)
-        # Fix para CSV antiguo sin columna leverage
-        if 'leverage' not in df.columns:
-            df['leverage'] = 1.0
-        return df
-    except: return pd.DataFrame(columns=COLUMNS_DB)
-
 def save_trades(df):
     df.to_csv(CSV_FILE, index=False)
 
@@ -366,8 +390,8 @@ def render_analytics(df_trades):
         st.info("Aún no has cerrado ninguna operación.")
         return
     closed['cumulative_pnl'] = closed['pnl'].cumsum()
-    closed['equity'] = 10000 + closed['cumulative_pnl']
-    start = pd.DataFrame([{'time': 'Inicio', 'equity': 10000}])
+    closed['equity'] = INITIAL_CAPITAL + closed['cumulative_pnl']
+    start = pd.DataFrame([{'time': 'Inicio', 'equity': INITIAL_CAPITAL}])
     curve = pd.concat([start, closed[['time', 'equity']]])
     total_profit = closed['pnl'].sum()
     fig = px.area(curve, x='time', y='equity', title="Curva de Capital (Equity Curve)")
@@ -403,15 +427,18 @@ if df is not None:
 
     qty = 0
     leverage = 1.0
+    
+    # RECALCULAMOS BALANCE ACTUAL PARA USARLO EN EL TRADE
+    current_balance = get_current_balance()
+    
     if calc_dir:
         sl_dist = atr * 1.5
         risk = sl_dist
-        risk_amount = account_size * (risk_per_trade / 100)
+        risk_amount = current_balance * (risk_per_trade / 100) # RIESGO SOBRE BALANCE REAL
         qty = risk_amount / risk if risk > 0 else 0
         
-        # CÁLCULO DE APALANCAMIENTO DINÁMICO
         notional_value = qty * current_price
-        leverage = notional_value / account_size
+        leverage = notional_value / current_balance
         if leverage < 1: leverage = 1.0
 
         if calc_dir == "LONG":
@@ -423,7 +450,6 @@ if df is not None:
         setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'dir': emoji, 'status': setup_type, 'qty': qty, 'lev': leverage}
 
     if signal != "NEUTRO" and signal != st.session_state.last_alert and setup:
-        # MENSAJE DETALLADO DE TELEGRAM + APALANCAMIENTO
         msg = f"""🦁 *QUIMERA SIGNAL DETECTED* 🦁
 
 📉 *ACTIVO:* {symbol}
@@ -588,8 +614,6 @@ if df is not None:
             if not open_trades.empty:
                 open_trades['Floating PnL'] = np.where(open_trades['type'] == 'LONG', (current_price - open_trades['entry']) * open_trades['size'], (open_trades['entry'] - current_price) * open_trades['size'])
                 def color_floating(val): return f'color: {"#00FF00" if val > 0 else "#FF4444"}; font-weight: bold;'
-                
-                # Muestra la columna 'leverage'
                 cols_show = ['time', 'symbol', 'type', 'leverage', 'entry', 'size', 'sl', 'tp3', 'Floating PnL']
                 st.dataframe(open_trades[cols_show].style.applymap(color_floating, subset=['Floating PnL']).format({'leverage': '{:.1f}x'}), use_container_width=True)
             else: st.info("No hay operaciones abiertas.")
