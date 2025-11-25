@@ -5,6 +5,7 @@ import pandas_ta as ta
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+from prophet import Prophet
 import requests
 from datetime import datetime
 import time
@@ -15,7 +16,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v11 Titan", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v12 Sentient", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -44,14 +45,14 @@ st.markdown("""
     }
     
     .news-box {
-        background-color: #111; border: 1px solid #333; padding: 15px; border-radius: 10px; margin-bottom: 15px;
+        background-color: #111; border: 1px solid #333; padding: 15px; border-radius: 10px; margin-bottom: 15px; height: 250px; overflow-y: auto;
     }
     .news-item {
-        padding: 5px 0; border-bottom: 1px solid #222; font-size: 14px;
+        padding: 8px 0; border-bottom: 1px solid #222; font-size: 14px;
     }
     .news-link { text-decoration: none; color: #ddd; }
     .news-link:hover { color: #44AAFF; }
-    .news-time { color: #666; font-size: 11px; margin-right: 5px;}
+    .news-time { color: #666; font-size: 11px; margin-right: 5px; font-weight: bold;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -68,8 +69,8 @@ if 'balance' not in st.session_state: st.session_state.balance = 10000.0
 # 2. CONFIGURACIÓN (SIDEBAR MODULAR)
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v11.0")
-    st.caption("Titan Edition 🏛️")
+    st.title("🦁 QUIMERA v12.0")
+    st.caption("Sentient Edition 🧠")
     
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
@@ -85,10 +86,10 @@ with st.sidebar:
         use_rsi = st.checkbox("RSI & Stoch", True)
         use_obi = st.checkbox("Order Book Imbalance", True)
         
-    with st.expander("💰 GESTIÓN DE RIESGO (NUEVO)"):
+    with st.expander("💰 GESTIÓN DE RIESGO"):
         st.caption("Calculadora de Lotes Automática")
-        account_size = st.number_input("Tamaño Cuenta Real ($)", value=1000.0)
-        risk_per_trade = st.slider("Riesgo por Trade (%)", 0.5, 5.0, 1.0)
+        account_size = st.number_input("Tamaño Cuenta ($)", value=1000.0)
+        risk_per_trade = st.slider("Riesgo (%)", 0.5, 5.0, 1.0)
         
     with st.expander("⚙️ SALIDAS"):
         use_trailing = st.checkbox("Trailing Stop", True)
@@ -110,13 +111,22 @@ def init_exchange():
 
 exchange, source_name = init_exchange()
 
+# --- NUEVA API FEAR & GREED ---
+@st.cache_data(ttl=3600) # 1 hora de cache
+def get_fear_and_greed():
+    try:
+        r = requests.get("https://api.alternative.me/fng/")
+        data = r.json()['data'][0]
+        return int(data['value']), data['value_classification']
+    except: return 50, "Neutral"
+
 @st.cache_data(ttl=300)
 def get_crypto_news():
     rss_url = "https://cointelegraph.com/rss"
     try:
         feed = feedparser.parse(rss_url)
         news_items = []
-        for entry in feed.entries[:3]:
+        for entry in feed.entries[:5]: # Top 5 noticias
             news_items.append({"title": entry.title, "link": entry.link, "published": entry.published_parsed})
         return news_items
     except: return []
@@ -137,7 +147,8 @@ def get_mtf_data(symbol, tf_lower):
         ohlcv_4h = exchange.fetch_ohlcv(ticker_fix, '4h', limit=50)
         df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_4h['EMA_50'] = ta.ema(df_4h['close'], length=50)
-        if df_4h['close'].iloc[-1] > df_4h['EMA_50'].iloc[-1]: trend_4h = "BULLISH"
+        last_4h = df_4h.iloc[-1]
+        if last_4h['close'] > last_4h['EMA_50']: trend_4h = "BULLISH"
         else: trend_4h = "BEARISH"
     except: pass
 
@@ -151,7 +162,7 @@ def get_mtf_data(symbol, tf_lower):
     return df, obi, trend_4h
 
 # -----------------------------------------------------------------------------
-# 4. CAPA LÓGICA (INDICADORES + PATRONES + PIVOTES)
+# 4. CAPA LÓGICA
 # -----------------------------------------------------------------------------
 def calculate_indicators(df):
     if df is None: return None
@@ -172,8 +183,7 @@ def calculate_indicators(df):
     df = pd.concat([df, adx], axis=1)
     df['MFI'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
     
-    # --- NUEVO: PIVOT POINTS (Soportes/Resistencias Intradía) ---
-    # Calculo simple basado en últimas 20 velas para aproximación
+    # PIVOT POINTS
     high_w = df['high'].rolling(20).max()
     low_w = df['low'].rolling(20).min()
     close_w = df['close']
@@ -185,46 +195,44 @@ def calculate_indicators(df):
 
 def detect_candle_patterns(row, prev_row):
     patterns = []
-    # Doji
     body_size = abs(row['close'] - row['open'])
     full_range = row['high'] - row['low']
-    if full_range > 0 and (body_size / full_range) < 0.1: patterns.append("🕯️ Doji (Indecisión)")
-    
-    # Hammer / Shooting Star
+    if full_range > 0 and (body_size / full_range) < 0.1: patterns.append("🕯️ Doji")
     lower_wick = min(row['close'], row['open']) - row['low']
     upper_wick = row['high'] - max(row['close'], row['open'])
-    if lower_wick > (body_size * 2) and upper_wick < body_size: patterns.append("🔨 Hammer (Posible Rebote)")
-    
-    # Engulfing
+    if lower_wick > (body_size * 2) and upper_wick < body_size: patterns.append("🔨 Hammer")
     if row['close'] > row['open'] and prev_row['close'] < prev_row['open']:
-        if row['close'] > prev_row['open'] and row['open'] < prev_row['close']: patterns.append("🔥 Bullish Engulfing")
-    
+        if row['close'] > prev_row['open'] and row['open'] < prev_row['close']: patterns.append("🔥 Engulfing")
     return patterns
 
-def generate_ai_analysis(row, prev_row, trend_4h, obi, signal, prob):
+def generate_ai_analysis(row, prev_row, trend_4h, obi, signal, prob, fng_val, fng_class):
     analysis = []
     
-    # 1. Estructura
-    if trend_4h == "BULLISH": analysis.append("Estructura Macro (4H): ALCISTA.")
-    elif trend_4h == "BEARISH": analysis.append("Estructura Macro (4H): BAJISTA.")
+    # 1. Sentimiento
+    if fng_val < 20: analysis.append("😱 Pánico Extremo (Posible Suelo).")
+    elif fng_val > 80: analysis.append("🤑 Euforia Extrema (Posible Techo).")
     
-    # 2. Gasolina
+    # 2. Estructura
+    if trend_4h == "BULLISH": analysis.append("Estructura 4H: ALCISTA.")
+    elif trend_4h == "BEARISH": analysis.append("Estructura 4H: BAJISTA.")
+    
+    # 3. Gasolina
     mfi = row['MFI']
-    if mfi > 60: analysis.append("⛽ Flujo de dinero positivo (Entrada capital).")
-    elif mfi < 40: analysis.append("🪫 Flujo de dinero negativo (Salida capital).")
+    if mfi > 60: analysis.append("⛽ Flujo dinero POSITIVO.")
+    elif mfi < 40: analysis.append("🪫 Flujo dinero NEGATIVO.")
     
-    # 3. Patrones de Velas
+    # 4. Patrones
     patterns = detect_candle_patterns(row, prev_row)
-    if patterns: analysis.append(f"Patrón detectado: {', '.join(patterns)}")
+    if patterns: analysis.append(f"Patrón: {', '.join(patterns)}")
     
-    # 4. Conclusión
+    # 5. Conclusión
     if signal != "NEUTRO":
         direction = "SUBIDA" if signal == "LONG" else "BAJADA"
-        analysis.append(f"🎯 CONCLUSIÓN: Probabilidad {prob:.1f}% de {direction}.")
+        analysis.append(f"🎯 PROBABILIDAD: {prob:.1f}% de {direction}.")
     else:
-        analysis.append("⏳ CONCLUSIÓN: Mercado indeciso. Esperar ruptura.")
+        analysis.append("⏳ ESPERAR: Mercado indeciso.")
         
-    return " ".join(analysis)
+    return " | ".join(analysis)
 
 def run_strategy(df, obi, trend_4h, filters):
     row = df.iloc[-1]
@@ -271,7 +279,7 @@ def run_strategy(df, obi, trend_4h, filters):
     return signal, reasons, row['ATR'], prob
 
 # -----------------------------------------------------------------------------
-# 5. GESTIÓN PAPER TRADING & ANALYTICS
+# 5. GESTIÓN PAPER TRADING
 # -----------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
@@ -374,8 +382,11 @@ if df is not None:
     current_price = df['close'].iloc[-1]
     mfi_val = df['MFI'].iloc[-1]
     
-    ai_narrative = generate_ai_analysis(df.iloc[-1], df.iloc[-2], trend_4h, obi, signal, prob)
+    # OBTENER DATOS EXTERNOS (Sentimiento + Noticias)
+    fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
+    
+    ai_narrative = generate_ai_analysis(df.iloc[-1], df.iloc[-2], trend_4h, obi, signal, prob, fng_val, fng_label)
     
     setup = None
     calc_dir = signal 
@@ -386,15 +397,13 @@ if df is not None:
         elif trend_4h == "BEARISH": calc_dir = "SHORT"
         else: calc_dir = None
 
-    # --- CALCULADORA DE LOTES REAL ---
+    # CALCULADORA DE RIESGO
     qty = 0
     if calc_dir:
         sl_dist = atr * 1.5
         risk = sl_dist
-        risk_amount = account_size * (risk_per_trade / 100) # Ej: 1000 * 0.01 = 10$
-        
-        if risk > 0:
-            qty = risk_amount / risk # Cantidad exacta a comprar
+        risk_amount = account_size * (risk_per_trade / 100)
+        if risk > 0: qty = risk_amount / risk
         else: qty = 0
         
         if calc_dir == "LONG":
@@ -409,10 +418,10 @@ if df is not None:
     if signal != "NEUTRO" and signal != st.session_state.last_alert and setup:
         msg = f"""🦁 *QUIMERA SIGNAL: {signal}*
 Activo: {symbol}
-Prob: {prob:.1f}%
+Sentimiento: {fng_label} ({fng_val})
 
 🔥 *OPERACIÓN: {setup['dir']}*
-⚖️ *CANTIDAD SUGERIDA:* {qty:.4f} {symbol.split('/')[0]}
+⚖️ *Lote:* {qty:.4f}
 
 🔵 *ENTRADA:* ${current_price:.2f}
 🛑 *SL:* ${setup['sl']:.2f}
@@ -430,15 +439,38 @@ Prob: {prob:.1f}%
     tab1, tab2 = st.tabs(["📊 LIVE COMMAND", "🧪 PAPER TRADING"])
     
     with tab1:
-        if news:
-            st.markdown("### 📰 MARKET FLASH")
-            news_html = "<div class='news-box'>"
-            for n in news:
-                t_struct = n.get('published', time.gmtime())
-                t_str = f"{t_struct.tm_hour:02}:{t_struct.tm_min:02}"
-                news_html += f"<div class='news-item'><span class='news-time'>{t_str}</span> <a href='{n['link']}' target='_blank' class='news-link'>{n['title']}</a></div>"
-            news_html += "</div>"
-            st.markdown(news_html, unsafe_allow_html=True)
+        # --- PANEL SUPERIOR: NOTICIAS + SENTIMIENTO ---
+        col_news, col_fng = st.columns([2, 1])
+        with col_news:
+            if news:
+                st.markdown("### 📰 NOTICIAS EN VIVO")
+                news_html = "<div class='news-box'>"
+                for n in news:
+                    t_struct = n.get('published', time.gmtime())
+                    t_str = f"{t_struct.tm_hour:02}:{t_struct.tm_min:02}"
+                    news_html += f"<div class='news-item'><span class='news-time'>{t_str}</span> <a href='{n['link']}' target='_blank' class='news-link'>{n['title']}</a></div>"
+                news_html += "</div>"
+                st.markdown(news_html, unsafe_allow_html=True)
+        
+        with col_fng:
+            st.markdown("### 🧠 PSICOLOGÍA")
+            # Gauge Chart para Fear & Greed
+            fig_fng = go.Figure(go.Indicator(
+                mode = "gauge+number",
+                value = fng_val,
+                title = {'text': f"<b>{fng_label}</b>"},
+                gauge = {
+                    'axis': {'range': [0, 100]},
+                    'bar': {'color': "white"},
+                    'steps': [
+                        {'range': [0, 25], 'color': "#FF4444"},
+                        {'range': [25, 50], 'color': "#FF8800"},
+                        {'range': [50, 75], 'color': "#FFFF00"},
+                        {'range': [75, 100], 'color': "#00FF00"}],
+                }
+            ))
+            fig_fng.update_layout(height=250, margin=dict(l=20,r=20,t=30,b=20), paper_bgcolor="#111", font={'color': "white"})
+            st.plotly_chart(fig_fng, use_container_width=True)
 
         st.markdown(f"<div class='ai-box'>🤖 <b>QUIMERA COPILOT:</b><br>{ai_narrative}</div>", unsafe_allow_html=True)
         
@@ -456,7 +488,7 @@ Prob: {prob:.1f}%
             if setup['status'] == "CONFIRMED":
                 header_cls = "header-confirmed-long" if calc_dir == "LONG" else "header-confirmed-short"
                 header_txt = f"🔥 CONFIRMADO: {setup['dir']}"
-                btn_label = f"🚀 EJECUTAR {calc_dir} ({setup['qty']:.4f} u.)"
+                btn_label = f"🚀 EJECUTAR {calc_dir} ({setup['qty']:.4f})"
             else:
                 header_cls = "header-potential"
                 header_txt = f"⚠️ POTENCIAL: {setup['dir']}"
@@ -477,7 +509,7 @@ Prob: {prob:.1f}%
             
             if st.button(btn_label):
                 execute_trade(calc_dir, current_price, setup['sl'], setup['tp1'], setup['tp2'], setup['tp3'], setup['qty'], atr)
-                st.success(f"Orden {calc_dir} lanzada con size {setup['qty']:.4f}.")
+                st.success(f"Orden {calc_dir} lanzada.")
         else:
             st.info("Esperando estructura de mercado clara...")
 
@@ -485,7 +517,7 @@ Prob: {prob:.1f}%
         fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
         if use_vwap: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
         
-        # PIVOTE + SOPORTES (NUEVO)
+        # PIVOTE + SOPORTES
         last_pivot = df.iloc[-1]['PIVOT']
         last_s1 = df.iloc[-1]['S1']
         last_r1 = df.iloc[-1]['R1']
