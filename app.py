@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v15.8 Fixed", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v15.9 Stable", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -48,6 +48,7 @@ st.markdown("""
     .clock-closed { background-color: rgba(255, 0, 0, 0.1); border: 1px solid #555; color: #888; }
     
     .status-dot-on { color: #00FF00; font-weight: bold; text-shadow: 0 0 5px #00FF00; }
+    .status-dot-off { color: #FF4444; font-weight: bold; }
     
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
@@ -66,8 +67,7 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
-# --- CLAVE API (Directa para que funcione YA) ---
-# En producción, usa st.secrets
+# CLAVE API DIRECTA
 COINGLASS_API_KEY = "1d4579f4c59149c6b6a1d83494a4f67c"
 
 # -----------------------------------------------------------------------------
@@ -174,7 +174,7 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v15.8")
+    st.title("🦁 QUIMERA v15.9")
     st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
     get_market_sessions()
     st.divider()
@@ -220,6 +220,16 @@ def init_exchange():
     except: return ccxt.kraken(), "Kraken (Fallback)"
 
 exchange, source_name = init_exchange()
+
+# --- FUNCIÓN RECUPERADA: FEAR AND GREED ---
+@st.cache_data(ttl=3600) 
+def get_fear_and_greed():
+    try:
+        r = requests.get("https://api.alternative.me/fng/")
+        data = r.json()['data'][0]
+        return int(data['value']), data['value_classification']
+    except: return 50, "Neutral"
+# -----------------------------------------
 
 @st.cache_data(ttl=300)
 def get_crypto_news():
@@ -289,6 +299,7 @@ def calculate_indicators(df):
 # 5. IA ANALISTA
 # -----------------------------------------------------------------------------
 def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src):
+    # 1. CONTEXTO MULTI-TIMEFRAME
     t_15m = mtf_trends.get('15m', 'NEUTRO')
     t_1h = mtf_trends.get('1h', 'NEUTRO')
     t_4h = mtf_trends.get('4h', 'NEUTRO')
@@ -654,7 +665,7 @@ if df is not None:
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['RSI'], line=dict(color='purple'), name='RSI'), row=2, col=1)
         fig.add_hline(y=70, row=2, col=1); fig.add_hline(y=30, row=2, col=1)
         
-        # Titulo dinámico
+        # Actualizar titulo del grafico con la fuente
         fig.update_layout(title=f"Chart Source: {source_name}", template="plotly_dark", height=500, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
