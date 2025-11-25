@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v15.6 Fixed", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v15.7 Stable", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -48,7 +48,6 @@ st.markdown("""
     .clock-closed { background-color: rgba(255, 0, 0, 0.1); border: 1px solid #555; color: #888; }
     
     .status-dot-on { color: #00FF00; font-weight: bold; text-shadow: 0 0 5px #00FF00; }
-    .status-dot-off { color: #FF4444; font-weight: bold; }
     
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
@@ -67,8 +66,11 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
-# CLAVE API DIRECTA
-COINGLASS_API_KEY = "1d4579f4c59149c6b6a1d83494a4f67c"
+# --- GESTIÓN DE CLAVES SEGURA ---
+try:
+    COINGLASS_API_KEY = st.secrets["COINGLASS_KEY"]
+except:
+    COINGLASS_API_KEY = None # Se usará Bybit/dYdX como fallback
 
 # -----------------------------------------------------------------------------
 # 2. MOTOR DE DATOS
@@ -110,7 +112,7 @@ def get_deriv_data(symbol):
     base_coin = symbol.split('/')[0]
     headers_browser = {'User-Agent': 'Mozilla/5.0'}
     
-    # 1. COINGLASS
+    # 1. COINGLASS (Prioridad si hay Key en secrets)
     if COINGLASS_API_KEY:
         try:
             headers_cg = {"coinglassSecret": COINGLASS_API_KEY}
@@ -133,13 +135,22 @@ def get_deriv_data(symbol):
             if total_oi > 0: return avg_fr, total_oi, "CoinGlass"
         except: pass
 
-    # 2. BYBIT
+    # 2. BYBIT (Fallback Público)
     try:
         url = f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_coin}USDT"
         r = requests.get(url, headers=headers_browser, timeout=3).json()
         if r['retCode'] == 0:
             info = r['result']['list'][0]
             return float(info['fundingRate']) * 100, float(info['openInterestValue']), "Bybit"
+    except: pass
+
+    # 3. DYDX (Fallback Descentralizado)
+    try:
+        dydx_symbol = f"{base_coin}-USD"
+        url = f"https://api.dydx.exchange/v3/markets/{dydx_symbol}"
+        r = requests.get(url, headers=headers_browser, timeout=3).json()
+        market = r['market']
+        return float(market['nextFundingRate']) * 100, float(market['openInterest']), "dYdX"
     except: pass
 
     return 0.0, 0.0, "Error"
@@ -165,7 +176,7 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v15.6")
+    st.title("🦁 QUIMERA v15.7")
     st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
     get_market_sessions()
     st.divider()
@@ -271,9 +282,7 @@ def calculate_indicators(df):
         df['TSI'] = df[tsi_col]
     except: df['TSI'] = 0
     
-    high_w = df['high'].rolling(20).max()
-    low_w = df['low'].rolling(20).min()
-    close_w = df['close']
+    high_w, low_w, close_w = df['high'].rolling(20).max(), df['low'].rolling(20).min(), df['close']
     df['PIVOT'] = (high_w + low_w + close_w) / 3
     df['R1'], df['S1'] = (2 * df['PIVOT']) - low_w, (2 * df['PIVOT']) - high_w
     return df.fillna(method='bfill').fillna(method='ffill')
@@ -282,6 +291,7 @@ def calculate_indicators(df):
 # 5. IA ANALISTA
 # -----------------------------------------------------------------------------
 def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src):
+    # 1. CONTEXTO MULTI-TIMEFRAME
     t_15m = mtf_trends.get('15m', 'NEUTRO')
     t_1h = mtf_trends.get('1h', 'NEUTRO')
     t_4h = mtf_trends.get('4h', 'NEUTRO')
@@ -292,6 +302,7 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     elif t_4h == "BEAR" and t_15m == "BULL": context = "<span style='color:#FFFF00'>REBOTE TÉCNICO</span> (Macro Bajista / Micro Alcista)"
     else: context = "MERCADO MIXTO (Conflicto de Temporalidades)"
     
+    # 2. DATOS DERIVADOS
     deriv_txt = f"Funding Rate: <b style='color:#fff'>{fr:.4f}%</b>"
     if fr > 0.01: deriv_txt += " (Long Squeeze Risk)"
     elif fr < -0.01: deriv_txt += " (Short Squeeze Risk)"
@@ -457,11 +468,13 @@ if df is not None:
     current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
     mfi_val, adx_val = df['MFI'].iloc[-1], df['ADX_14'].iloc[-1]
     
+    # DATOS FIX (Coinglass / Bybit / dYdX)
     fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
     fr, open_interest, data_src = get_deriv_data(symbol)
     mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
     
+    # IA (HTML Correcto + TSI)
     ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest, data_src)
     
     setup = None
@@ -544,17 +557,22 @@ if df is not None:
             fig_fng.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
             st.plotly_chart(fig_fng, use_container_width=True)
 
+        # HTML IA
         st.markdown(ai_html, unsafe_allow_html=True)
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Precio", f"${current_price:,.2f}")
+        
+        # WIDGETS
         c2.metric("Funding Rate", f"{fr:.4f}%", delta_color="inverse")
         
+        # Formateo Open Interest
         if open_interest > 1000000000: oi_show = f"${open_interest/1000000000:.2f}B"
         elif open_interest > 1000000: oi_show = f"${open_interest/1000000:.2f}M"
         else: oi_show = f"${open_interest:,.0f}"
         c3.metric("Open Interest", oi_show)
         
+        # MTF
         with c4:
             cols = st.columns(3)
             colors = {"BULL": "🟢", "BEAR": "🔴", "NEUTRO": "⚪"}
