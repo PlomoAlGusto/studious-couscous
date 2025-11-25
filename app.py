@@ -84,9 +84,6 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
-# API KEY COINGLASS (Respaldo) - Se lee desde st.secrets ahora
-# COINGLASS_API_KEY = "1d4579f4c59149c6b6a1d83494a4f67c" # <-- ¡BORRADA DE AQUÍ!
-
 # -----------------------------------------------------------------------------
 # 2. MOTOR DE DATOS (CCXT POWERED)
 # -----------------------------------------------------------------------------
@@ -136,7 +133,7 @@ def get_market_sessions():
 
 @st.cache_data(ttl=60)
 def get_deriv_data(symbol):
-    COINGLASS_API_KEY = st.secrets.get("COINGLASS_API_KEY") # <-- LEER DE SECRETS
+    COINGLASS_API_KEY = st.secrets.get("COINGLASS_API_KEY")  # Leer de secrets
     
     # 1. Intento con CoinGlass
     if COINGLASS_API_KEY:
@@ -151,40 +148,47 @@ def get_deriv_data(symbol):
             total_oi = 0.0
             avg_fr = 0.0
             
-            if r_oi.get('success'):
+            if r_oi.get('success') and r_oi.get('data'):
                 for ex in r_oi['data']: total_oi += ex.get('openInterestAmount', 0) * ex.get('price', 0)
             
-            if r_fr.get('success'):
+            if r_fr.get('success') and r_fr.get('data'):
                 for ex in r_fr['data']:
                     if ex['exchangeName'] == 'Binance':
                         if 'uMarginList' in ex and len(ex['uMarginList']) > 0: avg_fr = ex['uMarginList'][0]['rate']
                         break
             
             if total_oi > 0: return avg_fr, total_oi, "CoinGlass"
-        except: pass
-
+        except Exception as e:
+            print(f"Error CoinGlass: {e}")
+    
     # 2. Intento con CCXT (Binance Futures)
     try:
         exchange_f = ccxt.binanceusdm({'enableRateLimit': True})
         ticker = exchange_f.fetch_ticker(symbol)
-        fr = float(ticker['info']['lastFundingRate']) * 100
-        try:
-            oi_data = exchange_f.fetch_open_interest(symbol)
-            oi_val = float(oi_data['openInterestValue'])
-        except:
-            oi_val = float(ticker['quoteVolume']) * 0.2 
-        return fr, oi_val, "BinanceAPI"
-    except: pass
+        fr = float(ticker['info']['lastFundingRate']) * 100 if 'lastFundingRate' in ticker['info'] else None
+        oi_data = exchange_f.fetch_open_interest(symbol)
+        oi_val = float(oi_data['openInterestValue']) if oi_data and 'openInterestValue' in oi_data else None
+        if fr is not None and oi_val is not None:
+            return fr, oi_val, "BinanceAPI"
+    except Exception as e:
+        print(f"Error Binance: {e}")
 
-    # 3. Intento con CCXT (Kraken Futures - Fallback)
+    # 3. Intento con CCXT (Kraken Futures - Mejorado)
     try:
-        exchange_k = ccxt.krakenfutures()
-        exchange_k.fetch_ticker("PF_XBTUSD") # Check conexion
-        # Retornamos 0.0 para evitar datos como 94%
-        return 0.0, 0.0, "Kraken (Sin Datos Deriv.)"
-    except: pass
+        exchange_k = ccxt.krakenfutures({'enableRateLimit': True})
+        kraken_symbol = 'PF_XBTUSD' if 'BTC' in symbol else None  # Solo para BTC como ejemplo; extender si necesario
+        if kraken_symbol:
+            fr_data = exchange_k.fetch_funding_rate(kraken_symbol)
+            fr = float(fr_data['fundingRate']) * 100 if 'fundingRate' in fr_data else None
+            oi_data = exchange_k.fetch_open_interest(kraken_symbol)
+            oi_val = float(oi_data['openInterestValue']) if 'openInterestValue' in oi_data else None
+            if fr is not None and oi_val is not None:
+                return fr, oi_val, "KrakenAPI"
+    except Exception as e:
+        print(f"Error Kraken: {e}")
 
-    return 0.0, 0.0, "Error"
+    # Fallback final: Retornar None para manejar N/A
+    return None, None, "OFFLINE"
 
 @st.cache_data(ttl=30)
 def get_mtf_trends_analysis(symbol):
@@ -333,17 +337,21 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     elif t_4h == "BEAR" and t_15m == "BULL": context = "<span style='color:#FFFF00'>REBOTE TÉCNICO</span> (Macro Bajista / Micro Alcista)"
     else: context = "MERCADO MIXTO (Conflicto de Temporalidades)"
     
-    # 2. DATOS DERIVADOS
-    deriv_txt = f"Funding Rate: <b style='color:#fff'>{fr:.4f}%</b>"
-    if fr > 0.01: deriv_txt += " (Long Squeeze Risk)"
-    elif fr < -0.01: deriv_txt += " (Short Squeeze Risk)"
-    else: deriv_txt += " (Saludable)"
-    
-    if open_interest > 1000000000: oi_fmt = f"${open_interest/1000000000:.2f}B"
-    elif open_interest > 1000000: oi_fmt = f"${open_interest/1000000:.2f}M"
-    else: oi_fmt = f"${open_interest:,.0f}"
-    
-    oi_txt = f"Interés Abierto: <b style='color:#44AAFF'>{oi_fmt}</b>"
+    # 2. DATOS DERIVADOS (Manejo de N/A)
+    if fr is None or open_interest is None:
+        deriv_txt = "<span style='color:#FFFF00'>Fuentes Derivadas OFFLINE (N/A)</span>"
+        oi_txt = ""
+    else:
+        deriv_txt = f"Funding Rate: <b style='color:#fff'>{fr:.4f}%</b>"
+        if fr > 0.01: deriv_txt += " (Long Squeeze Risk)"
+        elif fr < -0.01: deriv_txt += " (Short Squeeze Risk)"
+        else: deriv_txt += " (Saludable)"
+        
+        if open_interest > 1000000000: oi_fmt = f"${open_interest/1000000000:.2f}B"
+        elif open_interest > 1000000: oi_fmt = f"${open_interest/1000000:.2f}M"
+        else: oi_fmt = f"${open_interest:,.0f}"
+        
+        oi_txt = f"Interés Abierto: <b style='color:#44AAFF'>{oi_fmt}</b>"
 
     # 3. MOMENTO (TSI / MFI / ADX)
     mfi = row['MFI']
@@ -436,7 +444,7 @@ def execute_trade(type, entry, sl, tp1, tp2, tp3, size, atr, leverage):
 def manage_open_positions(current_price, current_high, current_low):
     df = load_trades()
     if df.empty: return
-    open_idx = df.index[df['status'] == "OPEN"].tolist()
+    open_idx = df.index[df['status'] == 'OPEN'].tolist()
     updated = False
     for idx in open_idx:
         row = df.loc[idx]
@@ -600,13 +608,19 @@ if df is not None:
         c1.metric("Precio", f"${current_price:,.2f}")
         
         # WIDGETS
-        c2.metric("Funding Rate", f"{fr:.4f}%", delta_color="inverse")
+        if fr is None:
+            c2.metric("Funding Rate", "N/A", delta_color="off")
+        else:
+            c2.metric("Funding Rate", f"{fr:.4f}%", delta_color="inverse")
         
         # Formateo Open Interest
-        if open_interest > 1000000000: oi_show = f"${open_interest/1000000000:.2f}B"
-        elif open_interest > 1000000: oi_show = f"${open_interest/1000000:.2f}M"
-        else: oi_show = f"${open_interest:,.0f}"
-        c3.metric("Open Interest", oi_show)
+        if open_interest is None:
+            c3.metric("Open Interest", "N/A")
+        else:
+            if open_interest > 1000000000: oi_show = f"${open_interest/1000000000:.2f}B"
+            elif open_interest > 1000000: oi_show = f"${open_interest/1000000:.2f}M"
+            else: oi_show = f"${open_interest:,.0f}"
+            c3.metric("Open Interest", oi_show)
         
         # MTF
         with c4:
@@ -641,7 +655,7 @@ if df is not None:
         
         st.divider()
 
-        if setup:
+        if setup and calc_dir:
             prob_str = f"{prob:.1f}%"
             prob_color = "#00FF00" if prob >= 80 else "#FFFF00" if prob >= 60 else "#FF4444"
             if setup['status'] == "CONFIRMED":
