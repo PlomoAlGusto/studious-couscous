@@ -15,32 +15,20 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v15.4 Secure", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v15.5 Stability", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
     .metric-card {background-color: #262730; padding: 10px; border-radius: 8px; border: 1px solid #444;}
-    .big-signal {font-size: 24px; font-weight: bold; text-align: center; padding: 15px; border-radius: 10px; margin-bottom: 20px;}
-    
     .trade-setup {
-        background-color: #151515; 
-        padding: 20px; 
-        border-radius: 15px; 
-        border: 1px solid #444;
-        margin-top: 10px; 
-        margin-bottom: 20px; 
-        text-align: center;
+        background-color: #151515; padding: 20px; border-radius: 15px; border: 1px solid #444;
+        margin-top: 10px; margin-bottom: 20px; text-align: center;
         box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
-    
     .tp-green { color: #00FF00; font-weight: bold; font-size: 18px; }
     .sl-red { color: #FF4444; font-weight: bold; font-size: 18px; }
     .entry-blue { color: #44AAFF; font-weight: bold; font-size: 18px; }
     .label-mini { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px;}
-    
-    .header-confirmed-long { color: #00FF00; font-size: 20px; font-weight: 900; border-bottom: 1px solid #333; padding-bottom: 10px; }
-    .header-confirmed-short { color: #FF4444; font-size: 20px; font-weight: 900; border-bottom: 1px solid #333; padding-bottom: 10px; }
-    .header-potential { color: #FFFF00; font-size: 18px; font-weight: bold; border-bottom: 1px dashed #555; padding-bottom: 10px; }
     
     .ai-box {
         background-color: #111; 
@@ -55,17 +43,12 @@ st.markdown("""
     }
     .ai-title { color: #44AAFF; font-weight: bold; font-size: 14px; margin-bottom: 5px; display: block; }
     
-    .news-box {
-        background-color: #111; border: 1px solid #333; padding: 15px; border-radius: 10px; margin-bottom: 15px; height: 200px; overflow-y: auto;
-    }
-    .news-item { padding: 8px 0; border-bottom: 1px solid #222; font-size: 13px; }
-    .news-link { text-decoration: none; color: #ddd; }
-    .news-link:hover { color: #44AAFF; }
-    .news-time { color: #666; font-size: 11px; margin-right: 5px; font-weight: bold;}
-    
     .market-clock { font-size: 12px; padding: 5px; margin-bottom: 5px; border-radius: 4px; display: flex; justify-content: space-between;}
     .clock-open { background-color: rgba(0, 255, 0, 0.2); border: 1px solid #00FF00; }
     .clock-closed { background-color: rgba(255, 0, 0, 0.1); border: 1px solid #555; color: #888; }
+    
+    .status-dot-on { color: #00FF00; font-weight: bold; text-shadow: 0 0 5px #00FF00; }
+    .status-dot-off { color: #FF4444; font-weight: bold; }
     
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
@@ -84,16 +67,11 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
-# --- GESTIÓN DE CLAVES SEGURA (GITHUB SAFE) ---
-try:
-    # Intenta leer de secrets.toml (Local) o Secrets (Cloud)
-    COINGLASS_API_KEY = st.secrets["COINGLASS_KEY"]
-except:
-    # Si no existe, se queda vacío y usará Bybit por defecto
-    COINGLASS_API_KEY = None
+# CLAVE API (Directa para evitar errores de lectura)
+COINGLASS_API_KEY = "1d4579f4c59149c6b6a1d83494a4f67c"
 
 # -----------------------------------------------------------------------------
-# 2. MOTOR DE DATOS (MULTI-FUENTE)
+# 2. MOTOR DE DATOS (CON HEADERS ANTI-BLOQUEO)
 # -----------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=COLUMNS_DB)
@@ -130,17 +108,26 @@ def get_market_sessions():
 @st.cache_data(ttl=120)
 def get_deriv_data(symbol):
     """
-    Obtiene Funding Rate y Open Interest.
-    Prioridad: CoinGlass (Si hay Key) -> Bybit (Pública) -> dYdX (Fallback)
+    Obtiene Funding Rate y Open Interest usando Headers falsos para evitar bloqueos.
     """
     base_coin = symbol.split('/')[0]
     
-    # 1. COINGLASS (Solo si existe la clave en secrets)
+    # HEADERS MÁGICOS (Simulan ser un navegador Chrome)
+    headers_browser = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    
+    # 1. COINGLASS
     if COINGLASS_API_KEY:
         try:
-            headers = {"coinglassSecret": COINGLASS_API_KEY}
+            headers_cg = {"coinglassSecret": COINGLASS_API_KEY}
+            # OI
             url_oi = f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base_coin}"
-            r_oi = requests.get(url_oi, headers=headers, timeout=2).json()
+            r_oi = requests.get(url_oi, headers=headers_cg, timeout=3).json()
+            
+            # Funding
+            url_fr = f"https://open-api.coinglass.com/public/v2/funding?symbol={base_coin}"
+            r_fr = requests.get(url_fr, headers=headers_cg, timeout=3).json()
             
             total_oi = 0.0
             avg_fr = 0.0
@@ -148,9 +135,6 @@ def get_deriv_data(symbol):
             if r_oi.get('success'):
                 for ex in r_oi['data']:
                     total_oi += ex.get('openInterestAmount', 0) * ex.get('price', 0)
-            
-            url_fr = f"https://open-api.coinglass.com/public/v2/funding?symbol={base_coin}"
-            r_fr = requests.get(url_fr, headers=headers, timeout=2).json()
             
             if r_fr.get('success'):
                 for ex in r_fr['data']:
@@ -162,10 +146,10 @@ def get_deriv_data(symbol):
             if total_oi > 0: return avg_fr, total_oi, "CoinGlass"
         except: pass
 
-    # 2. BYBIT V5 (Fuente Pública y Robusta)
+    # 2. BYBIT V5 (Pública y robusta)
     try:
         url = f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_coin}USDT"
-        r = requests.get(url, timeout=2).json()
+        r = requests.get(url, headers=headers_browser, timeout=3).json()
         if r['retCode'] == 0:
             info = r['result']['list'][0]
             fr = float(info['fundingRate']) * 100
@@ -173,11 +157,11 @@ def get_deriv_data(symbol):
             return fr, oi_val, "Bybit"
     except: pass
 
-    # 3. DYDX (Fallback Descentralizado)
+    # 3. DYDX
     try:
         dydx_symbol = f"{base_coin}-USD"
         url = f"https://api.dydx.exchange/v3/markets/{dydx_symbol}"
-        r = requests.get(url, timeout=2).json()
+        r = requests.get(url, headers=headers_browser, timeout=3).json()
         market = r['market']
         fr = float(market['nextFundingRate']) * 100
         oi = float(market['openInterest'])
@@ -216,8 +200,10 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v15.4")
-    st.caption("Secure GitHub Edition 🔒")
+    st.title("🦁 QUIMERA v15.5")
+    # Estado del sistema
+    st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
+    
     get_market_sessions()
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT")
@@ -233,6 +219,7 @@ with st.sidebar:
     with st.expander("🌊 MOMENTO Y VOLUMEN"):
         use_rsi = st.checkbox("RSI & Stoch", True)
         use_obi = st.checkbox("Order Book Imbalance", True)
+        use_tsi = st.checkbox("TSI (True Strength)", True) # Nuevo
         
     with st.expander("💰 GESTIÓN DE RIESGO"):
         current_balance = get_current_balance()
@@ -254,9 +241,17 @@ def init_exchange():
     try:
         if "BINANCE_API_KEY" in st.secrets:
             ex = ccxt.binance({'apiKey': st.secrets["BINANCE_API_KEY"], 'secret': st.secrets["BINANCE_SECRET"], 'options': {'defaultType': 'spot'}})
-            ex.load_markets(); return ex, "Binance"
+            ex.load_markets()
+            return ex, "Binance (Priv)"
     except: pass
-    return ccxt.kraken(), "Kraken (Visual)"
+    
+    # Public Binance
+    try:
+        ex = ccxt.binance()
+        ex.load_markets()
+        return ex, "Binance (Pub)"
+    except:
+        return ccxt.kraken(), "Kraken (Fallback)"
 
 exchange, source_name = init_exchange()
 
@@ -320,13 +315,22 @@ def calculate_indicators(df):
     df = pd.concat([df, adx], axis=1)
     df['MFI'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
     
+    # TSI (True Strength Index) - Nuevo
+    try:
+        tsi = ta.tsi(df['close'], fast=13, slow=25)
+        df = pd.concat([df, tsi], axis=1)
+        # Rename TSI column usually TSI_13_25_13
+        tsi_col = [c for c in df.columns if 'TSI' in c][0]
+        df['TSI'] = df[tsi_col]
+    except: df['TSI'] = 0
+    
     high_w, low_w, close_w = df['high'].rolling(20).max(), df['low'].rolling(20).min(), df['close']
     df['PIVOT'] = (high_w + low_w + close_w) / 3
     df['R1'], df['S1'] = (2 * df['PIVOT']) - low_w, (2 * df['PIVOT']) - high_w
     return df.fillna(method='bfill').fillna(method='ffill')
 
 # -----------------------------------------------------------------------------
-# 5. IA ANALISTA (HTML FORMAT)
+# 5. IA ANALISTA (MEJORADO CON GASOLINA/TSI)
 # -----------------------------------------------------------------------------
 def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src):
     # 1. CONTEXTO MULTI-TIMEFRAME
@@ -342,8 +346,8 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     
     # 2. DATOS DERIVADOS
     deriv_txt = f"Funding Rate: <b style='color:#fff'>{fr:.4f}%</b>"
-    if fr > 0.01: deriv_txt += " (Peligro de Long Squeeze)"
-    elif fr < -0.01: deriv_txt += " (Posible Short Squeeze)"
+    if fr > 0.01: deriv_txt += " (Long Squeeze Risk)"
+    elif fr < -0.01: deriv_txt += " (Short Squeeze Risk)"
     else: deriv_txt += " (Saludable)"
     
     if open_interest > 1000000000: oi_fmt = f"${open_interest/1000000000:.2f}B"
@@ -352,7 +356,19 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     
     oi_txt = f"Interés Abierto: <b style='color:#44AAFF'>{oi_fmt}</b>"
 
-    # 3. FLUJO (OBI)
+    # 3. MOMENTO & FUERZA (GASOLINA/TSI)
+    mfi = row['MFI']
+    adx = row['ADX_14']
+    tsi = row['TSI']
+    
+    gas_status = "LLENO (Alta Demanda)" if mfi > 60 else "RESERVA (Baja Demanda)" if mfi < 40 else "MEDIO"
+    gas_color = "#00FF00" if mfi > 60 else "#FF4444" if mfi < 40 else "#FFF"
+    
+    tsi_status = "ALCISTA" if tsi > 0 else "BAJISTA"
+    
+    mom_txt = f"Gasolina (MFI): <b style='color:{gas_color}'>{gas_status}</b>. ADX: {adx:.1f}. TSI: {tsi_status} ({tsi:.2f})."
+
+    # 4. FLUJO (OBI)
     pressure = "COMPRADORA" if obi > 0.05 else "VENDEDORA" if obi < -0.05 else "NEUTRA"
     obi_color = "#00FF00" if obi > 0.05 else "#FF4444" if obi < -0.05 else "#aaa"
     obi_txt = f"Presión Libro: <b style='color:{obi_color}'>{pressure}</b> ({obi*100:.1f}%)"
@@ -362,6 +378,7 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
         <span class='ai-title'>🤖 QUIMERA COPILOT (Data Source: {data_src}):</span>
         <div style='margin-top:5px;'>📡 <b>ESTRUCTURA:</b> {context}</div>
         <div>📊 <b>DERIVADOS:</b> {deriv_txt}. {oi_txt}</div>
+        <div>🔥 <b>MOMENTO:</b> {mom_txt}</div>
         <div>⛽ <b>VOLUMEN:</b> {obi_txt}</div>
     </div>
     """
@@ -392,6 +409,11 @@ def run_strategy(df, obi, trend_4h, filters):
         if obi > 0.05: score += 1; details.append("<span class='badge-bull'>OBI</span>")
         elif obi < -0.05: score -= 1; details.append("<span class='badge-bear'>OBI</span>")
         else: details.append("<span class='badge-neutral'>OBI</span>")
+    
+    if filters.get('use_tsi', False): # TSI Logic
+        max_score += 1
+        if row['TSI'] > 0: score += 1; details.append("<span class='badge-bull'>TSI</span>")
+        else: score -= 1; details.append("<span class='badge-bear'>TSI</span>")
     
     threshold = max_score * 0.4
     signal = "NEUTRO"
@@ -491,7 +513,7 @@ df, obi, trend_4h = get_mtf_data(symbol, tf)
 
 if df is not None:
     df = calculate_indicators(df)
-    filters = {'use_mtf': use_mtf, 'use_ema': use_ema, 'use_vwap': use_vwap, 'use_ichi': use_ichi, 'use_regime': use_regime, 'use_rsi': use_rsi, 'use_obi': use_obi}
+    filters = {'use_mtf': use_mtf, 'use_ema': use_ema, 'use_vwap': use_vwap, 'use_ichi': use_ichi, 'use_regime': use_regime, 'use_rsi': use_rsi, 'use_obi': use_obi, 'use_tsi': use_tsi}
     signal, atr, prob, thermo_score, details_list = run_strategy(df, obi, trend_4h, filters)
     current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
     mfi_val, adx_val = df['MFI'].iloc[-1], df['ADX_14'].iloc[-1]
@@ -502,7 +524,7 @@ if df is not None:
     fr, open_interest, data_src = get_deriv_data(symbol)
     mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
     
-    # IA (HTML Correcto)
+    # IA (HTML Correcto + TSI)
     ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest, data_src)
     
     setup = None
@@ -673,7 +695,7 @@ if df is not None:
         else: st.info("Esperando estructura de mercado clara...")
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-        fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
+        fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price', name=f'{source_name} Data'), row=1, col=1)
         if use_vwap: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
         last_pivot, last_s1, last_r1 = df.iloc[-1]['PIVOT'], df.iloc[-1]['S1'], df.iloc[-1]['R1']
         fig.add_hline(y=last_pivot, line_dash="dash", line_color="gray", annotation_text="Pivote", row=1, col=1)
@@ -684,7 +706,9 @@ if df is not None:
             fig.add_hline(y=setup['sl'], line_dash="dot", line_color="red", row=1, col=1)
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['RSI'], line=dict(color='purple'), name='RSI'), row=2, col=1)
         fig.add_hline(y=70, row=2, col=1); fig.add_hline(y=30, row=2, col=1)
-        fig.update_layout(height=500, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
+        
+        # Actualizar titulo del grafico con la fuente
+        fig.update_layout(title=f"Chart Source: {source_name}", template="plotly_dark", height=500, margin=dict(l=0,r=0,t=30,b=0), xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
