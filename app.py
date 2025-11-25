@@ -45,6 +45,7 @@ if not os.path.exists(CSV_FILE):
     df_empty.to_csv(CSV_FILE, index=False)
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
+if 'balance' not in st.session_state: st.session_state.balance = 10000.0
 
 # -----------------------------------------------------------------------------
 # 2. CAPA DE CONFIGURACIÓN (SIDEBAR MODULAR)
@@ -57,6 +58,8 @@ with st.sidebar:
     tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
 
     with st.expander("🛡️ GRUPO A: FILTROS ESTRUCTURA", expanded=True):
+        # AQUÍ ESTABA EL ERROR: Faltaba 'use_ema'
+        use_ema = st.checkbox("Tendencia Base (EMAs)", True) 
         use_mtf = st.checkbox("Filtro Macro (4H Trend)", True)
         use_vwap = st.checkbox("Filtro VWAP (Institucional)", True)
         use_ichi = st.checkbox("Filtro Nube Ichimoku", False)
@@ -151,13 +154,13 @@ def calculate_indicators(df):
 
 def get_ai_advice(row, trend_4h, obi):
     advice = []
-    if row['ADX_14'] < 20: advice.append("⚠️ Lateral: Riesgo de falsas señales.")
-    if trend_4h == "BULLISH": advice.append("✅ Macro 4H Alcista: Prioriza Longs.")
-    elif trend_4h == "BEARISH": advice.append("🔻 Macro 4H Bajista: Prioriza Shorts.")
-    if abs(obi) > 0.1: advice.append("🔥 Volumen fuerte en libro.")
+    if row['ADX_14'] < 20: advice.append("⚠️ Mercado Lateral: Cuidado con falsas rupturas.")
+    if trend_4h == "BULLISH": advice.append("✅ Tendencia Macro (4H) Alcista: Prioriza Longs.")
+    elif trend_4h == "BEARISH": advice.append("🔻 Tendencia Macro (4H) Bajista: Prioriza Shorts.")
+    if abs(obi) > 0.1: advice.append("🔥 Fuerte presión en el libro de órdenes.")
     return " | ".join(advice)
 
-def run_strategy(df, obi, trend_4h, filters): # AÑADIDO FILTERS AQUÍ
+def run_strategy(df, obi, trend_4h, filters):
     row = df.iloc[-1]
     score = 0
     max_score = 0
@@ -165,13 +168,13 @@ def run_strategy(df, obi, trend_4h, filters): # AÑADIDO FILTERS AQUÍ
 
     # 1. MTF (El Rey de los Filtros)
     if filters['use_mtf']:
-        max_score += 2
+        max_score += 2 
         if trend_4h == "BULLISH": score += 2
         elif trend_4h == "BEARISH": score -= 2
         else: max_score -= 2 
 
     # 2. EMAs
-    if filters['use_ema']: # Ahora usa filters['use_ema']
+    if filters['use_ema']: 
         max_score += 1
         if row['EMA_20'] > row['EMA_50']: score += 1; reasons.append("Cruce EMA")
         else: score -= 1
@@ -237,7 +240,6 @@ def execute_trade(type, entry, sl, tp1, tp2, tp3, size, atr):
         "candles_held": 0,
         "atr_entry": atr
     }
-    # Concatenar usando pd.concat en lugar de append
     new_row = pd.DataFrame([new_trade])
     df = pd.concat([new_row, df], ignore_index=True)
     save_trades(df)
@@ -256,25 +258,22 @@ def manage_open_positions(current_price):
         close_reason = ""
         pnl = 0
         
-        # 1. Time Stop
+        # 1. Time Stop Check
         if use_time_stop:
             df.at[idx, 'candles_held'] += 1
-            if df.at[idx, 'candles_held'] > 12:
+            if df.at[idx, 'candles_held'] > 12: 
                 current_pnl = (current_price - row['entry']) if row['type'] == "LONG" else (row['entry'] - current_price)
                 if current_pnl <= 0: close_reason = "Time Stop ⏳"
         
         # 2. Logic Updates
         if not close_reason:
             if row['type'] == "LONG":
-                # Trailing
                 if use_trailing:
                     new_sl = current_price - (row['atr_entry'] * 1.5)
                     if new_sl > row['sl']: df.at[idx, 'sl'] = new_sl
-                # Breakeven
                 if use_breakeven and current_price > (row['entry'] * 1.015):
-                     if row['sl'] < row['entry']: df.at[idx, 'sl'] = row['entry']
+                     if row['sl'] < row['entry']: df.at[index, 'sl'] = row['entry']
                 
-                # Exits
                 if current_price >= row['tp3']: close_reason = "TP3 Moon 🚀"; pnl = (row['tp3']-row['entry'])*row['size']
                 elif current_price <= row['sl']: close_reason = "SL 🛑"; pnl = (row['sl']-row['entry'])*row['size']
             
@@ -283,7 +282,7 @@ def manage_open_positions(current_price):
                     new_sl = current_price + (row['atr_entry'] * 1.5)
                     if new_sl < row['sl']: df.at[idx, 'sl'] = new_sl
                 if use_breakeven and current_price < (row['entry'] * 0.985):
-                     if row['sl'] > row['entry']: df.at[idx, 'sl'] = row['entry']
+                     if row['sl'] > row['entry']: df.at[index, 'sl'] = row['entry']
 
                 if current_price <= row['tp3']: close_reason = "TP3 Moon 🚀"; pnl = (row['entry']-row['tp3'])*row['size']
                 elif current_price >= row['sl']: close_reason = "SL 🛑"; pnl = (row['entry']-row['sl'])*row['size']
@@ -296,7 +295,7 @@ def manage_open_positions(current_price):
             send_telegram_msg(f"💰 CIERRE {symbol}: {close_reason}\nPnL: ${pnl:.2f}")
             updated = True
 
-    if updated or use_time_stop: # Guardar si hubo cambios o si actualizamos velas
+    if updated or use_time_stop:
         save_trades(df)
 
 def send_telegram_msg(msg):
@@ -313,7 +312,7 @@ df, obi, trend_4h = get_mtf_data(symbol, tf)
 if df is not None:
     df = calculate_indicators(df)
     
-    # Empaquetamos filtros para evitar errores de scope
+    # Empaquetamos filtros (AHORA INCLUYE use_ema)
     filters = {
         'use_mtf': use_mtf, 'use_ema': use_ema, 'use_vwap': use_vwap,
         'use_ichi': use_ichi, 'use_regime': use_regime, 'use_rsi': use_rsi,
@@ -323,7 +322,7 @@ if df is not None:
     signal, reasons, atr, prob = run_strategy(df, obi, trend_4h, filters)
     current_price = df['close'].iloc[-1]
     
-    # Copilot Advice
+    # Copilot
     advice = get_ai_advice(df.iloc[-1], trend_4h, obi)
     
     # Táctica
@@ -343,28 +342,25 @@ if df is not None:
 
     # Alertas
     if signal != "NEUTRO" and signal != st.session_state.last_alert:
-        send_telegram_msg(f"🦁 v6.0: {signal} {symbol}\nMTF 4H: {trend_4h}\nProb: {prob:.1f}%")
+        send_telegram_msg(f"🦁 v6.1: {signal} {symbol}\nMTF 4H: {trend_4h}\nProb: {prob:.1f}%")
         st.session_state.last_alert = signal
     elif signal == "NEUTRO": st.session_state.last_alert = "NEUTRO"
     
-    # Ejecutar Gestión de Posiciones (Loop)
+    # Loop de Gestión
     manage_open_positions(current_price)
     
     # --- UI ---
     tab1, tab2 = st.tabs(["📊 LIVE COMMAND", "🧪 PAPER TRADING (CSV)"])
     
     with tab1:
-        # HEADER DE ESTADO
         st.info(f"🤖 AI COPILOT: {advice}")
         
-        # METRICAS
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Precio", f"${current_price:,.2f}")
         c2.metric("Tendencia 4H", trend_4h, delta="Bullish" if trend_4h=="BULLISH" else "Bearish", delta_color="normal")
         c3.metric("OBI", f"{obi:.1%}")
         c4.metric("Probabilidad", f"{prob:.1f}%")
 
-        # TARJETA TÁCTICA
         if signal != "NEUTRO" and setup:
             header_class = "direction-header-long" if signal == "LONG" else "direction-header-short"
             st.markdown(f"""
@@ -414,8 +410,8 @@ if df is not None:
             total_pnl = closed_trades['pnl'].sum()
             st.metric("PnL Total Acumulado", f"${total_pnl:.2f}")
         else:
-            st.info("El historial está vacío. Ejecuta tu primera operación.")
+            st.info("Historial vacío.")
 
-else: st.warning("Cargando Motores MTF...")
+else: st.warning("Cargando datos...")
 
 if auto_refresh: time.sleep(60); st.rerun()
