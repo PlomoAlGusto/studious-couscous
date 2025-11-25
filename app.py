@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v15.1 Secure", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v15.2 Unstoppable", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -94,10 +94,10 @@ if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 try:
     COINGLASS_API_KEY = st.secrets["COINGLASS_KEY"]
 except:
-    COINGLASS_API_KEY = "" # Si no hay clave, usará fallback
+    COINGLASS_API_KEY = ""
 
 # -----------------------------------------------------------------------------
-# 2. FUNCIONES DE DATOS (COINGLASS INTEGRADO)
+# 2. MOTOR DE DATOS: TRIPLE FALLBACK (COINGLASS -> DYDX -> BYBIT)
 # -----------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=COLUMNS_DB)
@@ -134,35 +134,32 @@ def get_market_sessions():
 @st.cache_data(ttl=120)
 def get_deriv_data(symbol):
     """
-    Obtiene Funding Rate y Open Interest usando CoinGlass API (Secure).
+    Obtiene Funding Rate y Open Interest con Triple Redundancia.
     """
-    clean_symbol = symbol.replace("/", "")
     base_coin = symbol.split('/')[0]
     
-    # INTENTO 1: COINGLASS (Si la clave existe en secrets)
+    # 1. COINGLASS (API V3 Endpoint Public)
     if COINGLASS_API_KEY:
         try:
             headers = {"coinglassSecret": COINGLASS_API_KEY}
-            
-            # 1. Open Interest
+            # OI Aggregate
             url_oi = f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base_coin}"
-            r_oi = requests.get(url_oi, headers=headers, timeout=3).json()
-            
-            # 2. Funding Rate
-            url_fr = f"https://open-api.coinglass.com/public/v2/funding?symbol={base_coin}"
-            r_fr = requests.get(url_fr, headers=headers, timeout=3).json()
+            r_oi = requests.get(url_oi, headers=headers, timeout=2).json()
             
             total_oi = 0.0
             avg_fr = 0.0
             
-            # Sumamos el OI de todos los exchanges
             if r_oi.get('success'):
                 for ex in r_oi['data']:
-                    val = ex.get('openInterestAmount', 0) * ex.get('price', 0)
-                    total_oi += val
+                    # Sum OI from all exchanges
+                    total_oi += ex.get('openInterestAmount', 0) * ex.get('price', 0)
             
-            # Buscamos el Funding Rate de Binance como referencia
+            # Funding Rate
+            url_fr = f"https://open-api.coinglass.com/public/v2/funding?symbol={base_coin}"
+            r_fr = requests.get(url_fr, headers=headers, timeout=2).json()
+            
             if r_fr.get('success'):
+                # Get Binance rate
                 for ex in r_fr['data']:
                     if ex['exchangeName'] == 'Binance':
                         if 'uMarginList' in ex and len(ex['uMarginList']) > 0:
@@ -171,31 +168,30 @@ def get_deriv_data(symbol):
             
             if total_oi > 0:
                 return avg_fr, total_oi
+        except: pass
 
-        except Exception as e:
-            pass # Falló CoinGlass, pasamos al Plan B
-
-    # INTENTO 2: BYBIT (Fallback Robusto)
-    try:
-        bybit = ccxt.bybit()
-        ticker = bybit.fetch_ticker(symbol)
-        fr = float(ticker['info'].get('fundingRate', 0)) * 100
-        oi_val = float(ticker['info'].get('openInterestValue', 0))
-        return fr, oi_val
-    except:
-        pass
-
-    # INTENTO 3: DYDX (Fallback Final)
+    # 2. DYDX (Descentralizado - Sin bloqueo)
     try:
         dydx_symbol = f"{base_coin}-USD"
         url = f"https://api.dydx.exchange/v3/markets/{dydx_symbol}"
         r = requests.get(url, timeout=2).json()
-        data = r['market']
-        fr = float(data['nextFundingRate']) * 100 
-        oi_val = float(data['openInterest']) 
-        return fr, oi_val
-    except:
-        return 0.0, 0.0
+        market = r['market']
+        fr = float(market['nextFundingRate']) * 100
+        oi = float(market['openInterest'])
+        return fr, oi
+    except: pass
+
+    # 3. BYBIT V5 (API Pública Robusta)
+    try:
+        url = f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_coin}USDT"
+        r = requests.get(url, timeout=2).json()
+        info = r['result']['list'][0]
+        fr = float(info['fundingRate']) * 100
+        oi = float(info['openInterestValue'])
+        return fr, oi
+    except: pass
+
+    return 0.0, 0.0
 
 @st.cache_data(ttl=30)
 def get_mtf_trends_analysis(symbol):
@@ -227,8 +223,8 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v15.1")
-    st.caption("Secure Edition 🔒")
+    st.title("🦁 QUIMERA v15.2")
+    st.caption("Unstoppable Data 🛠️")
     get_market_sessions()
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT")
