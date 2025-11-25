@@ -7,7 +7,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from prophet import Prophet
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import time
 import numpy as np
 import os
@@ -16,7 +16,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v12 Sentient", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v13 Chronos", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -47,12 +47,15 @@ st.markdown("""
     .news-box {
         background-color: #111; border: 1px solid #333; padding: 15px; border-radius: 10px; margin-bottom: 15px; height: 250px; overflow-y: auto;
     }
-    .news-item {
-        padding: 8px 0; border-bottom: 1px solid #222; font-size: 14px;
-    }
+    .news-item { padding: 8px 0; border-bottom: 1px solid #222; font-size: 14px; }
     .news-link { text-decoration: none; color: #ddd; }
     .news-link:hover { color: #44AAFF; }
     .news-time { color: #666; font-size: 11px; margin-right: 5px; font-weight: bold;}
+    
+    /* ESTILO RELOJES */
+    .market-clock { font-size: 12px; padding: 5px; margin-bottom: 5px; border-radius: 4px; display: flex; justify-content: space-between;}
+    .clock-open { background-color: rgba(0, 255, 0, 0.2); border: 1px solid #00FF00; }
+    .clock-closed { background-color: rgba(255, 0, 0, 0.1); border: 1px solid #555; color: #888; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -68,9 +71,44 @@ if 'balance' not in st.session_state: st.session_state.balance = 10000.0
 # -----------------------------------------------------------------------------
 # 2. CONFIGURACIÓN (SIDEBAR MODULAR)
 # -----------------------------------------------------------------------------
+def get_market_sessions():
+    """Calcula qué mercados están abiertos ahora (aprox UTC)"""
+    now = datetime.now(timezone.utc)
+    hour = now.hour
+    
+    # Horarios aproximados UTC
+    sessions = {
+        "🇬🇧 LONDRES": (8, 16),
+        "🇺🇸 NEW YORK": (13, 21),
+        "🇯🇵 TOKYO": (0, 9),
+        "🇦🇺 SYDNEY": (22, 7)
+    }
+    
+    st.sidebar.markdown("### 🌍 SESIONES")
+    for name, (start, end) in sessions.items():
+        is_open = False
+        if start < end:
+            is_open = start <= hour < end
+        else: # Cruza medianoche (Sydney)
+            is_open = hour >= start or hour < end
+            
+        status_icon = "🟢 ABIERTO" if is_open else "🔴 CERRADO"
+        css_class = "clock-open" if is_open else "clock-closed"
+        
+        st.sidebar.markdown(f"""
+        <div class='market-clock {css_class}'>
+            <span>{name}</span>
+            <span>{status_icon}</span>
+        </div>
+        """, unsafe_allow_html=True)
+
 with st.sidebar:
-    st.title("🦁 QUIMERA v12.0")
-    st.caption("Sentient Edition 🧠")
+    st.title("🦁 QUIMERA v13.0")
+    st.caption("Chronos Edition ⏳")
+    
+    # WIDGET DE RELOJES
+    get_market_sessions()
+    st.divider()
     
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
@@ -111,8 +149,7 @@ def init_exchange():
 
 exchange, source_name = init_exchange()
 
-# --- NUEVA API FEAR & GREED ---
-@st.cache_data(ttl=3600) # 1 hora de cache
+@st.cache_data(ttl=3600) 
 def get_fear_and_greed():
     try:
         r = requests.get("https://api.alternative.me/fng/")
@@ -126,7 +163,7 @@ def get_crypto_news():
     try:
         feed = feedparser.parse(rss_url)
         news_items = []
-        for entry in feed.entries[:5]: # Top 5 noticias
+        for entry in feed.entries[:5]:
             news_items.append({"title": entry.title, "link": entry.link, "published": entry.published_parsed})
         return news_items
     except: return []
@@ -183,7 +220,6 @@ def calculate_indicators(df):
     df = pd.concat([df, adx], axis=1)
     df['MFI'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
     
-    # PIVOT POINTS
     high_w = df['high'].rolling(20).max()
     low_w = df['low'].rolling(20).min()
     close_w = df['close']
@@ -207,30 +243,21 @@ def detect_candle_patterns(row, prev_row):
 
 def generate_ai_analysis(row, prev_row, trend_4h, obi, signal, prob, fng_val, fng_class):
     analysis = []
+    if trend_4h == "BULLISH": analysis.append("Estructura Macro (4H): ALCISTA.")
+    elif trend_4h == "BEARISH": analysis.append("Estructura Macro (4H): BAJISTA.")
     
-    # 1. Sentimiento
-    if fng_val < 20: analysis.append("😱 Pánico Extremo (Posible Suelo).")
-    elif fng_val > 80: analysis.append("🤑 Euforia Extrema (Posible Techo).")
-    
-    # 2. Estructura
-    if trend_4h == "BULLISH": analysis.append("Estructura 4H: ALCISTA.")
-    elif trend_4h == "BEARISH": analysis.append("Estructura 4H: BAJISTA.")
-    
-    # 3. Gasolina
     mfi = row['MFI']
     if mfi > 60: analysis.append("⛽ Flujo dinero POSITIVO.")
     elif mfi < 40: analysis.append("🪫 Flujo dinero NEGATIVO.")
     
-    # 4. Patrones
     patterns = detect_candle_patterns(row, prev_row)
     if patterns: analysis.append(f"Patrón: {', '.join(patterns)}")
     
-    # 5. Conclusión
     if signal != "NEUTRO":
         direction = "SUBIDA" if signal == "LONG" else "BAJADA"
-        analysis.append(f"🎯 PROBABILIDAD: {prob:.1f}% de {direction}.")
+        analysis.append(f"🎯 CONCLUSIÓN: Probabilidad {prob:.1f}% de {direction}.")
     else:
-        analysis.append("⏳ ESPERAR: Mercado indeciso.")
+        analysis.append("⏳ CONCLUSIÓN: Mercado indeciso. Esperar ruptura.")
         
     return " | ".join(analysis)
 
@@ -238,8 +265,8 @@ def run_strategy(df, obi, trend_4h, filters):
     row = df.iloc[-1]
     score = 0
     max_score = 0
-    reasons = []
-
+    
+    # Sistema de Puntuación (Termómetro)
     if filters['use_mtf']:
         max_score += 2
         if trend_4h == "BULLISH": score += 2
@@ -248,19 +275,20 @@ def run_strategy(df, obi, trend_4h, filters):
 
     if filters['use_ema']: 
         max_score += 1
-        if row['EMA_20'] > row['EMA_50']: score += 1; reasons.append("Cruce EMA")
+        if row['EMA_20'] > row['EMA_50']: score += 1
         else: score -= 1
 
     if filters['use_vwap']:
         max_score += 1
-        if row['close'] > row['VWAP']: score += 1; reasons.append("VWAP")
+        if row['close'] > row['VWAP']: score += 1
         else: score -= 1
         
     if filters['use_obi']:
         max_score += 1
-        if obi > 0.05: score += 1; reasons.append("OrderBook")
+        if obi > 0.05: score += 1
         elif obi < -0.05: score -= 1
     
+    # Logica de Señal
     threshold = max_score * 0.4
     signal = "NEUTRO"
     if score > threshold: signal = "LONG"
@@ -273,10 +301,16 @@ def run_strategy(df, obi, trend_4h, filters):
     if filters['use_mtf'] and signal == "LONG" and trend_4h == "BEARISH": signal = "NEUTRO"
     if filters['use_mtf'] and signal == "SHORT" and trend_4h == "BULLISH": signal = "NEUTRO"
 
+    # Probabilidad
     prob = 50.0
     if max_score > 0: prob = 50 + ((abs(score)/max_score)*45)
     
-    return signal, reasons, row['ATR'], prob
+    # Puntuación para el Termómetro (-10 a +10)
+    thermometer_score = 0
+    if max_score > 0:
+        thermometer_score = (score / max_score) * 100 # -100 a 100
+    
+    return signal, row['ATR'], prob, thermometer_score
 
 # -----------------------------------------------------------------------------
 # 5. GESTIÓN PAPER TRADING
@@ -378,14 +412,12 @@ if df is not None:
         'use_obi': use_obi
     }
     
-    signal, reasons, atr, prob = run_strategy(df, obi, trend_4h, filters)
+    signal, atr, prob, thermo_score = run_strategy(df, obi, trend_4h, filters)
     current_price = df['close'].iloc[-1]
     mfi_val = df['MFI'].iloc[-1]
     
-    # OBTENER DATOS EXTERNOS (Sentimiento + Noticias)
     fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
-    
     ai_narrative = generate_ai_analysis(df.iloc[-1], df.iloc[-2], trend_4h, obi, signal, prob, fng_val, fng_label)
     
     setup = None
@@ -397,7 +429,6 @@ if df is not None:
         elif trend_4h == "BEARISH": calc_dir = "SHORT"
         else: calc_dir = None
 
-    # CALCULADORA DE RIESGO
     qty = 0
     if calc_dir:
         sl_dist = atr * 1.5
@@ -418,7 +449,7 @@ if df is not None:
     if signal != "NEUTRO" and signal != st.session_state.last_alert and setup:
         msg = f"""🦁 *QUIMERA SIGNAL: {signal}*
 Activo: {symbol}
-Sentimiento: {fng_label} ({fng_val})
+Prob: {prob:.1f}%
 
 🔥 *OPERACIÓN: {setup['dir']}*
 ⚖️ *Lote:* {qty:.4f}
@@ -439,11 +470,11 @@ Sentimiento: {fng_label} ({fng_val})
     tab1, tab2 = st.tabs(["📊 LIVE COMMAND", "🧪 PAPER TRADING"])
     
     with tab1:
-        # --- PANEL SUPERIOR: NOTICIAS + SENTIMIENTO ---
-        col_news, col_fng = st.columns([2, 1])
+        # PANEL SUPERIOR: NOTICIAS + TERMOMETRO
+        col_news, col_thermo = st.columns([2, 1])
         with col_news:
             if news:
-                st.markdown("### 📰 NOTICIAS EN VIVO")
+                st.markdown("### 📰 MARKET FLASH")
                 news_html = "<div class='news-box'>"
                 for n in news:
                     t_struct = n.get('published', time.gmtime())
@@ -452,25 +483,25 @@ Sentimiento: {fng_label} ({fng_val})
                 news_html += "</div>"
                 st.markdown(news_html, unsafe_allow_html=True)
         
-        with col_fng:
-            st.markdown("### 🧠 PSICOLOGÍA")
-            # Gauge Chart para Fear & Greed
-            fig_fng = go.Figure(go.Indicator(
+        with col_thermo:
+            st.markdown("### 🎛️ TERMÓMETRO TÉCNICO")
+            # Gauge del Score Total (-100 a 100)
+            fig_thermo = go.Figure(go.Indicator(
                 mode = "gauge+number",
-                value = fng_val,
-                title = {'text': f"<b>{fng_label}</b>"},
+                value = thermo_score,
+                domain = {'x': [0, 1], 'y': [0, 1]},
+                title = {'text': "<b>Fuerza Técnica</b>"},
                 gauge = {
-                    'axis': {'range': [0, 100]},
+                    'axis': {'range': [-100, 100], 'tickwidth': 1, 'tickcolor': "white"},
                     'bar': {'color': "white"},
                     'steps': [
-                        {'range': [0, 25], 'color': "#FF4444"},
-                        {'range': [25, 50], 'color': "#FF8800"},
-                        {'range': [50, 75], 'color': "#FFFF00"},
-                        {'range': [75, 100], 'color': "#00FF00"}],
+                        {'range': [-100, -40], 'color': "#FF4444"},
+                        {'range': [-40, 40], 'color': "gray"},
+                        {'range': [40, 100], 'color': "#00FF00"}],
                 }
             ))
-            fig_fng.update_layout(height=250, margin=dict(l=20,r=20,t=30,b=20), paper_bgcolor="#111", font={'color': "white"})
-            st.plotly_chart(fig_fng, use_container_width=True)
+            fig_thermo.update_layout(height=250, margin=dict(l=20,r=20,t=30,b=20), paper_bgcolor="#111", font={'color': "white"})
+            st.plotly_chart(fig_thermo, use_container_width=True)
 
         st.markdown(f"<div class='ai-box'>🤖 <b>QUIMERA COPILOT:</b><br>{ai_narrative}</div>", unsafe_allow_html=True)
         
@@ -502,6 +533,7 @@ Sentimiento: {fng_label} ({fng_val})
                     <div><span class="label-mini">ENTRADA</span><br><span class="entry-blue">${setup['entry']:.2f}</span></div>
                     <div><span class="label-mini">STOP LOSS</span><br><span class="sl-red">${setup['sl']:.2f}</span></div>
                     <div><span class="label-mini">TP 1</span><br><span class="tp-green">${setup['tp1']:.2f}</span></div>
+                    <div><span class="label-mini">TP 2</span><br><span class="tp-green">${setup['tp2']:.2f}</span></div>
                     <div><span class="label-mini">TP 3</span><br><span class="tp-green">${setup['tp3']:.2f}</span></div>
                 </div>
             </div>
@@ -517,7 +549,6 @@ Sentimiento: {fng_label} ({fng_val})
         fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
         if use_vwap: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
         
-        # PIVOTE + SOPORTES
         last_pivot = df.iloc[-1]['PIVOT']
         last_s1 = df.iloc[-1]['S1']
         last_r1 = df.iloc[-1]['R1']
