@@ -10,11 +10,12 @@ from datetime import datetime
 import time
 import numpy as np
 import os
+import feedparser # LIBRERÍA NUEVA PARA NOTICIAS
 
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v8.0 Stable", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v9.0 News", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -39,13 +40,19 @@ st.markdown("""
     .header-potential { color: #FFFF00; font-size: 18px; font-weight: bold; border-bottom: 1px dashed #555; padding-bottom: 10px; }
     
     .ai-box {
-        background-color: #223344;
-        border-left: 5px solid #44AAFF;
-        padding: 15px;
-        border-radius: 5px;
-        margin-bottom: 15px;
-        font-family: monospace;
+        background-color: #223344; border-left: 5px solid #44AAFF; padding: 15px; border-radius: 5px; margin-bottom: 15px; font-family: monospace;
     }
+    
+    /* ESTILO NOTICIAS */
+    .news-box {
+        background-color: #111; border: 1px solid #333; padding: 15px; border-radius: 10px; margin-bottom: 15px;
+    }
+    .news-item {
+        padding: 5px 0; border-bottom: 1px solid #222; font-size: 14px;
+    }
+    .news-link { text-decoration: none; color: #ddd; }
+    .news-link:hover { color: #44AAFF; }
+    .news-time { color: #666; font-size: 11px; margin-right: 5px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -62,8 +69,8 @@ if 'balance' not in st.session_state: st.session_state.balance = 10000.0
 # 2. CONFIGURACIÓN (SIDEBAR MODULAR)
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v8.0")
-    st.caption("Stable Edition")
+    st.title("🦁 QUIMERA v9.0")
+    st.caption("News Feed Edition 📰")
     
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
@@ -99,6 +106,22 @@ def init_exchange():
     return ccxt.kraken(), "Kraken (Visual)"
 
 exchange, source_name = init_exchange()
+
+# --- MOTOR DE NOTICIAS (NUEVO) ---
+@st.cache_data(ttl=300) # Cache 5 min para no saturar
+def get_crypto_news():
+    rss_url = "https://cointelegraph.com/rss"
+    try:
+        feed = feedparser.parse(rss_url)
+        news_items = []
+        for entry in feed.entries[:3]: # Solo las 3 ultimas
+            news_items.append({
+                "title": entry.title,
+                "link": entry.link,
+                "published": entry.published_parsed
+            })
+        return news_items
+    except: return []
 
 @st.cache_data(ttl=15)
 def get_mtf_data(symbol, tf_lower):
@@ -329,6 +352,7 @@ if df is not None:
     current_price = df['close'].iloc[-1]
     
     ai_narrative = generate_ai_analysis(df.iloc[-1], trend_4h, obi, signal, prob)
+    news = get_crypto_news() # OBTENER NOTICIAS
     
     setup = None
     calc_dir = signal 
@@ -377,6 +401,20 @@ Prob: {prob:.1f}%
     tab1, tab2 = st.tabs(["📊 LIVE COMMAND", "🧪 PAPER TRADING"])
     
     with tab1:
+        # --- WIDGET DE NOTICIAS (NUEVO) ---
+        if news:
+            st.markdown("### 📰 MARKET FLASH")
+            news_html = "<div class='news-box'>"
+            for n in news:
+                t_struct = n.get('published', time.gmtime())
+                t_str = f"{t_struct.tm_hour:02}:{t_struct.tm_min:02}"
+                news_html += f"<div class='news-item'><span class='news-time'>{t_str}</span> <a href='{n['link']}' target='_blank' class='news-link'>{n['title']}</a></div>"
+            news_html += "</div>"
+            st.markdown(news_html, unsafe_allow_html=True)
+        else:
+            st.caption("Sin noticias recientes.")
+
+        # COPILOT Y DATOS
         st.markdown(f"<div class='ai-box'>🤖 <b>QUIMERA COPILOT:</b><br>{ai_narrative}</div>", unsafe_allow_html=True)
         
         c1, c2, c3, c4 = st.columns(4)
