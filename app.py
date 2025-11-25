@@ -516,6 +516,27 @@ Prob: {prob:.1f}%
         c4.metric("GASOLINA (MFI)", f"{mfi_val:.0f}", gas_state)
 
         if setup:
+            # --- MODIFICACIÓN: Cálculo visual de probabilidad ---
+            prob_str = f"{prob:.1f}%"
+            
+            # Definir color de la barra de probabilidad según fuerza
+            if prob >= 80: prob_color = "#00FF00" # Verde fuerte
+            elif prob >= 60: prob_color = "#FFFF00" # Amarillo
+            else: prob_color = "#FF4444" # Rojo
+            
+            # Barra de progreso HTML para insertar debajo del título
+            progress_bar_html = f"""
+            <div style='margin-top: 5px; margin-bottom: 10px; text-align: left;'>
+                <div style='display:flex; justify-content:space-between; color:#ccc; font-size:12px; margin-bottom:2px;'>
+                    <span>Probabilidad de Éxito:</span>
+                    <span style='color:{prob_color}; font-weight:bold;'>{prob_str}</span>
+                </div>
+                <div style='width: 100%; background-color: #333; border-radius: 4px; height: 6px;'>
+                    <div style='width: {prob}%; background-color: {prob_color}; height: 6px; border-radius: 4px; box-shadow: 0 0 5px {prob_color};'></div>
+                </div>
+            </div>
+            """
+            
             if setup['status'] == "CONFIRMED":
                 header_cls = "header-confirmed-long" if calc_dir == "LONG" else "header-confirmed-short"
                 header_txt = f"🔥 CONFIRMADO: {setup['dir']}"
@@ -528,6 +549,7 @@ Prob: {prob:.1f}%
             st.markdown(f"""
             <div class="trade-setup">
                 <div class="{header_cls}">{header_txt}</div>
+                {progress_bar_html}
                 <p style="color:#888; font-size:14px;">Posición Sugerida: <span style="color:white; font-weight:bold">{setup['qty']:.4f} {symbol.split('/')[0]}</span> (Riesgo ${risk_amount:.1f})</p>
                 <div style="display: flex; justify-content: space-around; margin-top: 10px;">
                     <div><span class="label-mini">ENTRADA</span><br><span class="entry-blue">${setup['entry']:.2f}</span></div>
