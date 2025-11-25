@@ -84,6 +84,22 @@ def load_trades():
         if 'leverage' not in df.columns: df['leverage'] = 1.0
         return df
     except: return pd.DataFrame(columns=COLUMNS_DB)
+        
+def get_fear_and_greed():
+    """
+    Obtiene el índice Fear & Greed de alternative.me
+    Retorna: (valor_entero, etiqueta_texto)
+    """
+    try:
+        url = "https://api.alternative.me/fng/?limit=1"
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        if 'data' in data and len(data['data']) > 0:
+            item = data['data'][0]
+            return int(item['value']), str(item['value_classification'])
+    except Exception as e:
+        print(f"Error Fear/Greed: {e}")
+    return 50, "Neutral" # Fallback por defecto
 
 def get_current_balance():
     df = load_trades()
