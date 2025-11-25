@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v13.5 Chronos", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v13.6 Chronos", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -103,7 +103,7 @@ def get_market_sessions():
         st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{status_icon}</span></div>", unsafe_allow_html=True)
 
 with st.sidebar:
-    st.title("🦁 QUIMERA v13.5")
+    st.title("🦁 QUIMERA v13.6")
     st.caption("Chronos Edition ⏳")
     get_market_sessions()
     st.divider()
@@ -243,7 +243,7 @@ def run_strategy(df, obi, trend_4h, filters):
     row = df.iloc[-1]
     score = 0
     max_score = 0
-    details = [] # Lista para almacenar qué indicadores activaron qué señal
+    details = [] 
     
     if filters['use_mtf']:
         max_score += 2
@@ -280,7 +280,6 @@ def run_strategy(df, obi, trend_4h, filters):
     if score > threshold: signal = "LONG"
     elif score < -threshold: signal = "SHORT"
     
-    # Filtros de invalidación
     if filters['use_rsi'] and (row['RSI'] > 70 and signal == "LONG"): 
         signal = "NEUTRO"; details.append("<span class='badge-neutral'>RSI-FILTER</span>")
     if filters['use_rsi'] and (row['RSI'] < 30 and signal == "SHORT"): 
@@ -443,25 +442,27 @@ if df is not None:
             else: st.info("Sin noticias recientes.")
         
         with col_tech:
+            # FIX: Use rgba(0,0,0,0) for transparency instead of hex
             fig_thermo = go.Figure(go.Indicator(
                 mode = "gauge+number", value = thermo_score, domain = {'x': [0, 1], 'y': [0, 1]},
                 title = {'text': "<span style='font-size:16px'>Bot Sentiment</span>"},
                 gauge = {'axis': {'range': [-100, 100]}, 'bar': {'color': "white"}, 'bgcolor': "#111",
                     'steps': [{'range': [-100, -40], 'color': "#FF4444"}, {'range': [-40, 40], 'color': "#555"}, {'range': [40, 100], 'color': "#00FF00"}]}
             ))
-            fig_thermo.update_layout(height=200, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="#00000000", font={'color': "white"})
+            fig_thermo.update_layout(height=200, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
             st.plotly_chart(fig_thermo, use_container_width=True)
             # INDICADORES ACTIVOS DEBAJO DEL GAUGE
             st.markdown(f"<div style='text-align:center'>{' '.join(details_list)}</div>", unsafe_allow_html=True)
 
         with col_fng:
+            # FIX: Use rgba(0,0,0,0) for transparency instead of hex
             fig_fng = go.Figure(go.Indicator(
                 mode = "gauge+number", value = fng_val, domain = {'x': [0, 1], 'y': [0, 1]},
                 title = {'text': "<span style='font-size:16px'>Fear & Greed</span>"},
                 gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "white"}, 'bgcolor': "#111",
                     'steps': [{'range': [0, 40], 'color': "#FF4444"}, {'range': [40, 60], 'color': "#FFFF00"}, {'range': [60, 100], 'color': "#00FF00"}]}
             ))
-            fig_fng.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="#00000000", font={'color': "white"})
+            fig_fng.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
             st.plotly_chart(fig_fng, use_container_width=True)
 
         st.markdown(f"<div class='ai-box'>🤖 <b>QUIMERA COPILOT:</b><br>{ai_narrative}</div>", unsafe_allow_html=True)
