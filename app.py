@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v14.8 Data Fix", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v15.1 Secure", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -71,6 +71,11 @@ st.markdown("""
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
     .badge-neutral { background-color: #333; color: #aaa; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #555; margin-right: 4px; }
+    
+    .stats-bar {
+        background-color: #1E1E1E; border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 20px;
+        display: flex; justify-content: space-around; align-items: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -85,8 +90,14 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
+# --- GESTIÓN DE CLAVES SEGURA ---
+try:
+    COINGLASS_API_KEY = st.secrets["COINGLASS_KEY"]
+except:
+    COINGLASS_API_KEY = "" # Si no hay clave, usará fallback
+
 # -----------------------------------------------------------------------------
-# 2. FUNCIONES DE DATOS AVANZADOS (DATA FIX)
+# 2. FUNCIONES DE DATOS (COINGLASS INTEGRADO)
 # -----------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=COLUMNS_DB)
@@ -120,45 +131,71 @@ def get_market_sessions():
         css_class = "clock-open" if is_open else "clock-closed"
         st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{status_icon}</span></div>", unsafe_allow_html=True)
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=120)
 def get_deriv_data(symbol):
     """
-    Obtiene Funding Rate y Open Interest.
-    Estrategia Híbrida: Intenta Binance -> Si falla, usa dYdX (No censurado).
+    Obtiene Funding Rate y Open Interest usando CoinGlass API (Secure).
     """
-    fr, oi_val = 0.0, 0.0
+    clean_symbol = symbol.replace("/", "")
+    base_coin = symbol.split('/')[0]
     
-    # INTENTO 1: BINANCE (Mejor calidad, pero puede estar bloqueado)
+    # INTENTO 1: COINGLASS (Si la clave existe en secrets)
+    if COINGLASS_API_KEY:
+        try:
+            headers = {"coinglassSecret": COINGLASS_API_KEY}
+            
+            # 1. Open Interest
+            url_oi = f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base_coin}"
+            r_oi = requests.get(url_oi, headers=headers, timeout=3).json()
+            
+            # 2. Funding Rate
+            url_fr = f"https://open-api.coinglass.com/public/v2/funding?symbol={base_coin}"
+            r_fr = requests.get(url_fr, headers=headers, timeout=3).json()
+            
+            total_oi = 0.0
+            avg_fr = 0.0
+            
+            # Sumamos el OI de todos los exchanges
+            if r_oi.get('success'):
+                for ex in r_oi['data']:
+                    val = ex.get('openInterestAmount', 0) * ex.get('price', 0)
+                    total_oi += val
+            
+            # Buscamos el Funding Rate de Binance como referencia
+            if r_fr.get('success'):
+                for ex in r_fr['data']:
+                    if ex['exchangeName'] == 'Binance':
+                        if 'uMarginList' in ex and len(ex['uMarginList']) > 0:
+                            avg_fr = ex['uMarginList'][0]['rate']
+                        break
+            
+            if total_oi > 0:
+                return avg_fr, total_oi
+
+        except Exception as e:
+            pass # Falló CoinGlass, pasamos al Plan B
+
+    # INTENTO 2: BYBIT (Fallback Robusto)
     try:
-        clean_symbol = symbol.replace("/", "")
-        fr_url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={clean_symbol}"
-        fr_r = requests.get(fr_url, timeout=1).json()
-        fr = float(fr_r['lastFundingRate']) * 100
-        
-        oi_url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={clean_symbol}"
-        oi_r = requests.get(oi_url, timeout=1).json()
-        mark_price = float(fr_r['markPrice'])
-        oi_val = float(oi_r['openInterest']) * mark_price
-        
+        bybit = ccxt.bybit()
+        ticker = bybit.fetch_ticker(symbol)
+        fr = float(ticker['info'].get('fundingRate', 0)) * 100
+        oi_val = float(ticker['info'].get('openInterestValue', 0))
         return fr, oi_val
     except:
-        pass # Falló Binance, pasamos al plan B
+        pass
 
-    # INTENTO 2: dYdX (Descentralizado, NO tiene bloqueo geográfico)
+    # INTENTO 3: DYDX (Fallback Final)
     try:
-        # Convertimos BTC/USDT a BTC-USD (formato dYdX)
-        dydx_symbol = symbol.split('/')[0] + "-USD"
+        dydx_symbol = f"{base_coin}-USD"
         url = f"https://api.dydx.exchange/v3/markets/{dydx_symbol}"
         r = requests.get(url, timeout=2).json()
         data = r['market']
-        
-        # dYdX da el funding rate de 1h, lo multiplicamos para estimar el de 8h estándar
         fr = float(data['nextFundingRate']) * 100 
-        oi_val = float(data['openInterest']) # Ya viene en USD
-        
+        oi_val = float(data['openInterest']) 
         return fr, oi_val
     except:
-        return 0.0001, 0.0 # Fallback final para no mostrar error
+        return 0.0, 0.0
 
 @st.cache_data(ttl=30)
 def get_mtf_trends_analysis(symbol):
@@ -190,8 +227,8 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v14.8")
-    st.caption("Data Fix Edition 🛠️")
+    st.title("🦁 QUIMERA v15.1")
+    st.caption("Secure Edition 🔒")
     get_market_sessions()
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT")
@@ -254,7 +291,7 @@ def get_mtf_data(symbol, tf_lower):
     if not exchange: return None, 0, None
     ticker_fix = symbol if "Binance" in source_name else "BTC/USDT"
     try:
-        ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=500) # Historial ampliado
+        ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=500)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     except: return None, 0, None
@@ -300,7 +337,7 @@ def calculate_indicators(df):
     return df.fillna(method='bfill').fillna(method='ffill')
 
 # -----------------------------------------------------------------------------
-# 5. IA ANALISTA (HTML FORMAT)
+# 5. IA ANALISTA
 # -----------------------------------------------------------------------------
 def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest):
     # 1. CONTEXTO MULTI-TIMEFRAME
@@ -320,7 +357,11 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     elif fr < -0.01: deriv_txt += " (Posible Short Squeeze)"
     else: deriv_txt += " (Saludable)"
     
-    oi_txt = f"Open Interest: <b style='color:#44AAFF'>${open_interest/1000000:.1f}M</b>"
+    if open_interest > 1000000000: oi_fmt = f"${open_interest/1000000000:.2f}B"
+    elif open_interest > 1000000: oi_fmt = f"${open_interest/1000000:.2f}M"
+    else: oi_fmt = f"${open_interest:,.0f}"
+    
+    oi_txt = f"Interés Abierto: <b style='color:#44AAFF'>{oi_fmt}</b>"
 
     # 3. FLUJO (OBI)
     pressure = "COMPRADORA" if obi > 0.05 else "VENDEDORA" if obi < -0.05 else "NEUTRA"
@@ -368,11 +409,14 @@ def run_strategy(df, obi, trend_4h, filters):
     if score > threshold: signal = "LONG"
     elif score < -threshold: signal = "SHORT"
     
-    if filters['use_regime'] and row['ADX_14'] < 20: signal = "NEUTRO"
+    if filters['use_regime'] and row['ADX_14'] < 20: 
+        signal = "NEUTRO"; details.append("<span class='badge-neutral'>ADX-LOW</span>")
         
     if filters['use_rsi']:
-        if row['RSI'] > 70 and signal == "LONG": signal = "NEUTRO"
-        if row['RSI'] < 30 and signal == "SHORT": signal = "NEUTRO"
+        if row['RSI'] > 70 and signal == "LONG": 
+            signal = "NEUTRO"; details.append("<span class='badge-neutral'>RSI-MAX</span>")
+        if row['RSI'] < 30 and signal == "SHORT": 
+            signal = "NEUTRO"; details.append("<span class='badge-neutral'>RSI-MIN</span>")
 
     prob = 50.0
     if max_score > 0: prob = 50 + ((abs(score)/max_score)*45)
@@ -463,7 +507,7 @@ if df is not None:
     current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
     mfi_val, adx_val = df['MFI'].iloc[-1], df['ADX_14'].iloc[-1]
     
-    # DATOS FIX (dYdX Fallback)
+    # DATOS FIX (Coinglass Integrated)
     fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
     fr, open_interest = get_deriv_data(symbol)
@@ -560,7 +604,12 @@ if df is not None:
         
         # WIDGETS
         c2.metric("Funding Rate", f"{fr:.4f}%", delta_color="inverse")
-        c3.metric("Open Interest", f"${open_interest/1000000:.1f}M")
+        
+        # Formateo Open Interest
+        if open_interest > 1000000000: oi_show = f"${open_interest/1000000000:.2f}B"
+        elif open_interest > 1000000: oi_show = f"${open_interest/1000000:.2f}M"
+        else: oi_show = f"${open_interest:,.0f}"
+        c3.metric("Open Interest", oi_show)
         
         # MTF
         with c4:
