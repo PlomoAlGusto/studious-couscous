@@ -11,16 +11,16 @@ import time
 import numpy as np
 import os
 import feedparser
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
 
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v16.1 Fixed Deriv", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v17.0 ML+Backtest", layout="wide", page_icon="🦁")
 st.markdown("""
 <style>
-    /* Estilos Generales */
     .metric-card {background-color: #262730; padding: 10px; border-radius: 8px; border: 1px solid #444;}
-    /* Estilos Trade Setup */
     .trade-setup {
         background-color: #151515; padding: 20px; border-radius: 15px; border: 1px solid #444;
         margin-top: 10px; margin-bottom: 20px; text-align: center;
@@ -30,15 +30,13 @@ st.markdown("""
     .sl-red { color: #FF4444; font-weight: bold; font-size: 18px; }
     .entry-blue { color: #44AAFF; font-weight: bold; font-size: 18px; }
     .label-mini { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px;}
-    /* Estilos QUIMERA COPILOT (AI BOX) - FUENTE MEJORADA */
     .ai-box {
         background-color: #0e1117;
         border-left: 4px solid #44AAFF; 
         padding: 15px; 
         border-radius: 5px; 
         margin-bottom: 15px; 
-        /* Fuente técnica moderna (tipo VS Code / Terminal) */
-        font-family: 'SF Mono', 'Consolas', 'Menlo', 'Monaco', 'Liberation Mono', 'Lucida Console', monospace;
+        font-family: 'SF Mono', 'Consolas', monospace;
         font-size: 13px;
         color: #e0e0e0;
         line-height: 1.6;
@@ -52,15 +50,12 @@ st.markdown("""
         display: block; 
         border-bottom: 1px solid #333;
         padding-bottom: 5px;
-        /* Fuente Sans-Serif para el título para contraste */
-        font-family: 'Segoe UI', 'Roboto', sans-serif;
+        font-family: 'Segoe UI', sans-serif;
     }
-    /* Relojes de Mercado */
     .market-clock { font-size: 12px; padding: 5px; margin-bottom: 5px; border-radius: 4px; display: flex; justify-content: space-between;}
     .clock-open { background-color: rgba(0, 255, 0, 0.2); border: 1px solid #00FF00; }
     .clock-closed { background-color: rgba(255, 0, 0, 0.1); border: 1px solid #555; color: #888; }
     .status-dot-on { color: #00FF00; font-weight: bold; text-shadow: 0 0 5px #00FF00; }
-    /* Badges */
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
     .badge-neutral { background-color: #333; color: #aaa; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #555; margin-right: 4px; }
@@ -127,86 +122,58 @@ def get_market_sessions():
         css_class = "clock-open" if is_open else "clock-closed"
         st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{status_icon}</span></div>", unsafe_allow_html=True)
 
+# =============================================================================
+# NUEVO: DERIVADOS MEJORADOS — PROMEDIO PONDERADO DE 3+ FUENTES
+# =============================================================================
 @st.cache_data(ttl=60)
 def get_deriv_data(symbol):
     base = symbol.split('/')[0]
     quote = symbol.split('/')[1]
     COINGLASS_API_KEY = st.secrets.get("COINGLASS_API_KEY", None)
-    
-    # Headers genéricos para evitar bloqueos
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (compatible; QuimeraPro/1.0; +https://quimerapro.ai)'
-    }
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
-    # 1. OKX — Fuente PRINCIPAL (accesible desde USA)
+    fr_sources, oi_sources = [], []
+
+    # Bybit
+    try:
+        inst = symbol.replace('/', '')
+        r_fr = requests.get(f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={inst}&limit=1", timeout=6, headers=headers).json()
+        r_oi = requests.get(f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={inst}&period=5min", timeout=6, headers=headers).json()
+        if r_fr.get('retCode') == 0 and r_fr['result']['list']:
+            fr_sources.append(float(r_fr['result']['list'][0]['fundingRate']) * 100)
+        if r_oi.get('retCode') == 0 and r_oi['result']['list']:
+            oi_sources.append(float(r_oi['result']['list'][0]['openInterest']))
+    except: pass
+
+    # OKX
     try:
         inst = f"{base}-{quote}-SWAP"
         r_fr = requests.get(f"https://www.okx.com/api/v5/public/funding-rate?instId={inst}", timeout=6, headers=headers).json()
         r_oi = requests.get(f"https://www.okx.com/api/v5/public/open-interest?instId={inst}", timeout=6, headers=headers).json()
         if r_fr.get('code') == '0' and r_fr['data']:
-            fr = float(r_fr['data'][0]['fundingRate']) * 100
-        else:
-            fr = None
+            fr_sources.append(float(r_fr['data'][0]['fundingRate']) * 100)
         if r_oi.get('code') == '0' and r_oi['data']:
-            oi = float(r_oi['data'][0]['openInterest'])
-        else:
-            oi = None
-        if fr is not None and oi is not None:
-            return fr, oi, "OKX"
-    except Exception as e:
-        print(f"OKX error: {e}")
-        pass
+            oi_sources.append(float(r_oi['data'][0]['openInterest']))
+    except: pass
 
-    # 2. Bybit — Fuente secundaria (no bloqueada en USA)
-    try:
-        inst = symbol.replace('/', '')
-        r_fr = requests.get(f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={inst}&limit=1", timeout=6, headers=headers).json()
-        r_oi = requests.get(f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={inst}&period=5min", timeout=6, headers=headers).json()
-        fr = float(r_fr['result']['list'][0]['fundingRate']) * 100 if r_fr.get('retCode') == 0 and r_fr.get('result', {}).get('list') else None
-        oi = float(r_oi['result']['list'][0]['openInterest']) if r_oi.get('retCode') == 0 and r_oi.get('result', {}).get('list') else None
-        if fr is not None and oi is not None:
-            return fr, oi, "Bybit"
-    except Exception as e:
-        print(f"Bybit error: {e}")
-        pass
-
-    # 3. CoinGlass (si tienes API key)
+    # CoinGlass
     if COINGLASS_API_KEY:
         try:
-            coinglass_headers = {
-                "coinglassSecret": COINGLASS_API_KEY,
-                "User-Agent": "QuimeraPro"
-            }
-            r_fr = requests.get(f"https://open-api.coinglass.com/public/v2/funding?symbol={base}", headers=coinglass_headers, timeout=6).json()
-            r_oi = requests.get(f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base}", headers=coinglass_headers, timeout=6).json()
-            fr_list = []
-            if r_fr.get('code') == 200 and r_fr.get('data'):
-                for ex in r_fr['data']:
-                    if ex.get('uMarginList') and len(ex['uMarginList']) > 0:
-                        fr_list.append(float(ex['uMarginList'][0]['rate']) * 100)
-            fr = np.mean(fr_list) if fr_list else None
-            oi_total = 0
-            if r_oi.get('code') == 200 and r_oi.get('data'):
-                for ex in r_oi['data']:
-                    oi_total += float(ex.get('openInterestAmount', 0)) * float(ex.get('price', 1))
-            if fr is not None and oi_total > 0:
-                return fr, oi_total, "CoinGlass"
-        except Exception as e:
-            print(f"CoinGlass error: {e}")
-            pass
+            cg_headers = {"coinglassSecret": COINGLASS_API_KEY, "User-Agent": "QuimeraPro"}
+            r_fr = requests.get(f"https://open-api.coinglass.com/public/v2/funding?symbol={base}", headers=cg_headers, timeout=6).json()
+            r_oi = requests.get(f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base}", headers=cg_headers, timeout=6).json()
+            if r_fr.get('code') == 200:
+                fr_list = [float(ex['uMarginList'][0]['rate']) * 100 for ex in r_fr.get('data', []) if ex.get('uMarginList')]
+                if fr_list: fr_sources.append(np.mean(fr_list))
+            if r_oi.get('code') == 200:
+                oi_total = sum(float(ex.get('openInterestAmount', 0)) * float(ex.get('price', 1)) for ex in r_oi.get('data', []))
+                if oi_total > 0: oi_sources.append(oi_total)
+        except: pass
 
-    # 4. dYdX (solo FR como último recurso)
-    try:
-        symbol_dydx = f"{base}-{quote}" if quote == "USD" else base
-        r = requests.get(f"https://indexer.dydx.exchange/v4/historicalFunding/{symbol_dydx}?limit=1", timeout=6, headers=headers).json()
-        if r and 'historicalFunding' in r and r['historicalFunding']:
-            fr = float(r['historicalFunding'][0]['rate']) * 100
-            return fr, 0, "dYdX (FR only)"
-    except Exception as e:
-        print(f"dYdX error: {e}")
-        pass
-
-    return None, None, "OFFLINE"
+    fr = np.mean(fr_sources) if fr_sources else None
+    oi = np.mean(oi_sources) if oi_sources else None
+    src = "Hybrid" if len(fr_sources) >= 2 else ("OKX" if fr_sources and "OKX" in str(fr_sources) else "Fallback")
+    return fr, oi, src
 
 @st.cache_data(ttl=30)
 def get_mtf_trends_analysis(symbol):
@@ -225,17 +192,128 @@ def get_mtf_trends_analysis(symbol):
         except: trends[tf] = "NEUTRO"
     return trends, score
 
+# =============================================================================
+# NUEVO: BACKTESTING INTEGRADO
+# =============================================================================
+def run_backtest(df, filters, atr_threshold=None):
+    if df is None or len(df) < 100: 
+        return None, 0.0, 0.0, 0, 0
+
+    df_bt = df.copy()
+    df_bt['EMA_20'] = ta.ema(df_bt['close'], length=20)
+    df_bt['EMA_50'] = ta.ema(df_bt['close'], length=50)
+    df_bt['ATR'] = ta.atr(df_bt['high'], df_bt['low'], df_bt['close'], length=14)
+    df_bt['RSI'] = ta.rsi(df_bt['close'], length=14)
+    adx_df = ta.adx(df_bt['high'], df_bt['low'], df_bt['close'], length=14)
+    df_bt = pd.concat([df_bt, adx_df], axis=1)
+    df_bt['ADX_14'] = df_bt['ADX_14'].fillna(0)
+
+    if atr_threshold is not None:
+        df_bt = df_bt[df_bt['ATR'] >= atr_threshold].copy()
+        if df_bt.empty: return None, 0.0, 0.0, 0, 0
+
+    signals = []
+    for i in range(50, len(df_bt)):
+        row = df_bt.iloc[i]
+        score, max_score = 0, 0
+
+        if filters['use_mtf']:
+            max_score += 2
+            trend_4h = "BULLISH" if df_bt['close'].iloc[i] > df_bt['close'].iloc[max(0,i-200):i].mean() else "BEARISH"
+            if trend_4h == "BULLISH": score += 2
+
+        if filters['use_ema']:
+            max_score += 1
+            if row['EMA_20'] > row['EMA_50']: score += 1
+
+        if filters['use_vwap'] and 'VWAP' in df_bt.columns:
+            max_score += 1
+            if row['close'] > row['VWAP']: score += 1
+
+        if filters['use_obi']:
+            max_score += 1
+            obi = (row.get('bids', 0) - row.get('asks', 0)) / (row.get('bids', 0) + row.get('asks', 0) + 1e-8)
+            if obi > 0.05: score += 1
+
+        if filters.get('use_tsi', False) and 'TSI' in df_bt.columns:
+            max_score += 1
+            if row['TSI'] > 0: score += 1
+
+        if filters['use_regime'] and row['ADX_14'] < 20:
+            signals.append(0)
+        else:
+            threshold = max_score * 0.4 if max_score > 0 else 0
+            if score > threshold: signals.append(1)
+            elif score < -threshold: signals.append(-1)
+            else: signals.append(0)
+
+    df_signals = df_bt.iloc[50:].copy()
+    df_signals['signal'] = signals[:-1] + [0] if len(signals) < len(df_bt.iloc[50:]) else signals
+
+    df_signals['return'] = df_signals['close'].pct_change()
+    df_signals['strategy_return'] = df_signals['signal'].shift(1) * df_signals['return']
+    total_return = df_signals['strategy_return'].sum()
+    win_trades = (df_signals['strategy_return'] > 0).sum()
+    total_trades = (df_signals['signal'] != 0).sum()
+    win_rate = win_trades / total_trades if total_trades > 0 else 0
+    expectancy = df_signals['strategy_return'].mean() if total_trades > 0 else 0
+
+    return df_signals, total_return, win_rate, total_trades, expectancy
+
+# =============================================================================
+# NUEVO: CLASIFICADOR DE RÉGIMEN CON ML LIGERO
+# =============================================================================
+def train_regime_classifier(df):
+    if len(df) < 100: return None, None
+    df_ml = df.copy()
+    df_ml['return'] = df_ml['close'].pct_change()
+    df_ml['vol'] = df_ml['return'].rolling(14).std()
+    df_ml['trend'] = (ta.ema(df_ml['close'], 20) > ta.ema(df_ml['close'], 50)).astype(int)
+    df_ml['label'] = np.where(df_ml['return'].shift(-10) > df_ml['vol'], 1,
+                             np.where(df_ml['return'].shift(-10) < -df_ml['vol'], -1, 0))
+    df_ml = df_ml.dropna()
+    if len(df_ml) < 50: return None, None
+
+    features = df_ml[['vol', 'ADX_14', 'RSI', 'trend']].fillna(0)
+    labels = df_ml['label']
+    scaler = StandardScaler()
+    X = scaler.fit_transform(features)
+    model = RandomForestClassifier(n_estimators=50, max_depth=3, random_state=42)
+    model.fit(X, labels)
+    return model, scaler
+
+# =============================================================================
+# NUEVO: FILTRO DE LIQUIDEZ Y CVD
+# =============================================================================
+def get_liquidity_and_cvd(exchange, symbol):
+    try:
+        book = exchange.fetch_order_book(symbol, limit=10)
+        bid = book['bids'][0][0] if book['bids'] else None
+        ask = book['asks'][0][0] if book['asks'] else None
+        if bid and ask:
+            spread_pct = (ask - bid) / ask * 100
+            is_liquid = spread_pct < 0.1
+            bids_vol = sum([x[1] for x in book['bids']])
+            asks_vol = sum([x[1] for x in book['asks']])
+            cvd = bids_vol - asks_vol
+            return is_liquid, cvd
+    except: pass
+    return False, 0
+
 # -----------------------------------------------------------------------------
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
-
 with st.sidebar:
-    st.title("🦁 QUIMERA v16.1")
+    st.title("🦁 QUIMERA v17.0 ML+Backtest")
     st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
     get_market_sessions()
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
+    
+    # NUEVO: Botón de backtest
+    run_backtest_flag = st.button("▶️ Ejecutar Backtest (500 velas)")
+
     with st.expander("🛡️ FILTROS & CORE", expanded=True):
         use_ema = st.checkbox("Tendencia Base (EMAs)", True)
         use_mtf = st.checkbox("Filtro Macro (4H Trend)", True)
@@ -254,21 +332,12 @@ with st.sidebar:
         use_trailing = st.checkbox("Trailing Stop", True)
         use_breakeven = st.checkbox("Breakeven (+1.5%)", True)
         use_time_stop = st.checkbox("Time Stop (12 Velas)", True)
-    # NUEVO: Debug para Deriv Data
-    with st.expander("🔍 DEBUG DERIVADOS", expanded=False):
-        if 'fr_debug' in locals():
-            st.write(f"**FR Raw:** {fr_debug:.4f}%")
-            st.write(f"**OI Raw:** ${oi_debug:,.0f}")
-            st.write(f"**Source:** {src_debug}")
-        else:
-            st.info("Ejecuta la app para ver datos.")
     auto_refresh = st.checkbox("🔄 AUTO-SCAN (60s)", False)
     if st.button("🔥 RESETEAR CUENTA"): reset_account()
 
 # -----------------------------------------------------------------------------
 # 4. CAPA DE DATOS
 # -----------------------------------------------------------------------------
-
 def init_exchange():
     try:
         if "BINANCE_API_KEY" in st.secrets:
@@ -290,13 +359,14 @@ def get_crypto_news():
 
 @st.cache_data(ttl=15)
 def get_mtf_data(symbol, tf_lower):
-    if not exchange: return None, 0, None
+    if not exchange: return None, 0, None, False, 0
     ticker_fix = symbol if "Binance" in source_name else "BTC/USDT"
     try:
-        ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=500)
+        ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=600)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    except: return None, 0, None
+    except: return None, 0, None, False, 0
+
     trend_4h = "NEUTRO"
     try:
         ohlcv_4h = exchange.fetch_ohlcv(ticker_fix, '4h', limit=50)
@@ -305,14 +375,10 @@ def get_mtf_data(symbol, tf_lower):
         last_4h = df_4h.iloc[-1]
         trend_4h = "BULLISH" if last_4h['close'] > last_4h['EMA_50'] else "BEARISH"
     except: pass
-    obi = 0
-    try:
-        book = exchange.fetch_order_book(ticker_fix, limit=20)
-        bids = sum([x[1] for x in book['bids']])
-        asks = sum([x[1] for x in book['asks']])
-        obi = (bids - asks) / (bids + asks) if (bids + asks) > 0 else 0
-    except: pass
-    return df, obi, trend_4h
+
+    is_liquid, cvd = get_liquidity_and_cvd(exchange, ticker_fix)
+
+    return df, cvd, trend_4h, is_liquid, cvd
 
 def calculate_indicators(df):
     if df is None: return None
@@ -343,9 +409,7 @@ def calculate_indicators(df):
 # -----------------------------------------------------------------------------
 # 5. IA ANALISTA (SYSTEM LOGIC, NOT AI)
 # -----------------------------------------------------------------------------
-
-def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src):
-    # 1. CONTEXTO MULTI-TIMEFRAME
+def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, cvd, fr, open_interest, data_src, regime, bayes_prob, is_liquid):
     t_15m = mtf_trends.get('15m', 'NEUTRO')
     t_1h = mtf_trends.get('1h', 'NEUTRO')
     t_4h = mtf_trends.get('4h', 'NEUTRO')
@@ -354,24 +418,24 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     elif t_4h == "BULL" and t_15m == "BEAR": context = "<span style='color:#FFFF00'>CORRECCIÓN EN CURSO</span> (Macro Alcista / Micro Bajista)"
     elif t_4h == "BEAR" and t_15m == "BULL": context = "<span style='color:#FFFF00'>REBOTE TÉCNICO</span> (Macro Bajista / Micro Alcista)"
     else: context = "MERCADO MIXTO (Conflicto de Temporalidades)"
-    # 2. DATOS DERIVADOS (Manejo de N/A)
+
     if fr is None or open_interest is None:
-        deriv_txt = "<span style='color:#FFFF00'>Fuentes Derivadas OFFLINE (Verifica conexión/API key)</span>"
+        deriv_txt = "<span style='color:#FFFF00'>Fuentes Derivadas OFFLINE</span>"
         oi_txt = ""
     else:
         deriv_txt = f"Funding Rate: <b style='color:#fff'>{fr:.4f}%</b>"
         squeeze_risk = ""
-        if fr > 0.02: squeeze_risk = " (HIGH Long Squeeze - Evita LONG)"
-        elif fr < -0.02: squeeze_risk = " (HIGH Short Squeeze - Evita SHORT)"
+        if fr > 0.02: squeeze_risk = " (HIGH Long Squeeze)"
+        elif fr < -0.02: squeeze_risk = " (HIGH Short Squeeze)"
         elif fr > 0.01: squeeze_risk = " (Long Squeeze Risk)"
         elif fr < -0.01: squeeze_risk = " (Short Squeeze Risk)"
         else: squeeze_risk = " (Saludable)"
         deriv_txt += squeeze_risk
-        if open_interest > 1000000000: oi_fmt = f"${open_interest/1000000000:.2f}B"
-        elif open_interest > 1000000: oi_fmt = f"${open_interest/1000000:.2f}M"
+        if open_interest > 1e9: oi_fmt = f"${open_interest/1e9:.2f}B"
+        elif open_interest > 1e6: oi_fmt = f"${open_interest/1e6:.2f}M"
         else: oi_fmt = f"${open_interest:,.0f}"
         oi_txt = f"Interés Abierto: <b style='color:#44AAFF'>{oi_fmt}</b>"
-    # 3. MOMENTO (TSI / MFI / ADX)
+
     mfi = row['MFI']
     adx = row['ADX_14']
     tsi = row['TSI']
@@ -380,22 +444,34 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     tsi_status = "ALCISTA" if tsi > 0 else "BAJISTA"
     tsi_color = "#00FF00" if tsi > 0 else "#FF4444"
     mom_txt = f"Gasolina (MFI): <b style='color:{gas_color}'>{gas_status}</b>. ADX: {adx:.1f}. TSI: <b style='color:{tsi_color}'>{tsi_status}</b> ({tsi:.2f})."
-    pressure = "COMPRADORA" if obi > 0.05 else "VENDEDORA" if obi < -0.05 else "NEUTRA"
-    obi_color = "#00FF00" if obi > 0.05 else "#FF4444" if obi < -0.05 else "#aaa"
-    obi_txt = f"Presión Libro: <b style='color:{obi_color}'>{pressure}</b> ({obi*100:.1f}%)"
+
+    cvd_txt = "🟢 Flujo Comprador" if cvd > 0 else "🔴 Flujo Vendedor" if cvd < 0 else "⚖️ Neutral"
+    cvd_color = "#00FF00" if cvd > 0 else "#FF4444" if cvd < 0 else "#aaa"
+
+    liquidity_txt = "✅ Mercado Líquido" if is_liquid else "⚠️ Ilíquido (Evitar)"
+
     html = f"""
     <div class='ai-box'>
-        <span class='ai-title'>🤖 QUIMERA COPILOT (Data Source: {data_src}):</span>
-        <div style='margin-top:5px;'>📡 <b>ESTRUCTURA:</b> {context}</div>
+        <span class='ai-title'>🤖 QUIMERA COPILOT v17.0 (ML + Backtest):</span>
+        <div>📡 <b>ESTRUCTURA:</b> {context}</div>
+        <div>🧠 <b>RÉGIMEN ML:</b> <b>{regime}</b></div>
         <div>📊 <b>DERIVADOS:</b> {deriv_txt}. {oi_txt}</div>
         <div>🔥 <b>MOMENTO:</b> {mom_txt}</div>
-        <div>⛽ <b>VOLUMEN:</b> {obi_txt}</div>
+        <div>💧 <b>CVD:</b> <b style='color:{cvd_color}'>{cvd_txt}</b> ({cvd:,.0f})</div>
+        <div>💧 <b>LIQUIDEZ:</b> {liquidity_txt}</div>
+        <div>🎯 <b>Prob. Bayesiana:</b> <b style='color:#44AAFF'>{bayes_prob:.1%}</b></div>
     </div>
     """
     return html
 
-def run_strategy(df, obi, trend_4h, filters, fr):
+def run_strategy(df, cvd, trend_4h, filters, fr, is_liquid, atr_vol_threshold):
     row = df.iloc[-1]
+    if not is_liquid: return "NEUTRO", row['ATR'], 50.0, 0, ["<span class='badge-neutral'>LIQUIDEZ</span>"]
+
+    # Filtro de volatilidad
+    if row['ATR'] < atr_vol_threshold:
+        return "NEUTRO", row['ATR'], 50.0, 0, ["<span class='badge-neutral'>VOLATILIDAD</span>"]
+
     score, max_score, details = 0, 0, []
     if filters['use_mtf']:
         max_score += 2
@@ -412,8 +488,9 @@ def run_strategy(df, obi, trend_4h, filters, fr):
         else: score -= 1; details.append("<span class='badge-bear'>VWAP</span>")
     if filters['use_obi']:
         max_score += 1
-        if obi > 0.05: score += 1; details.append("<span class='badge-bull'>OBI</span>")
-        elif obi < -0.05: score -= 1; details.append("<span class='badge-bear'>OBI</span>")
+        obi = np.sign(cvd)
+        if obi > 0: score += 1; details.append("<span class='badge-bull'>OBI</span>")
+        elif obi < 0: score -= 1; details.append("<span class='badge-bear'>OBI</span>")
         else: details.append("<span class='badge-neutral'>OBI</span>")
     if filters.get('use_tsi', False): 
         max_score += 1
@@ -430,17 +507,15 @@ def run_strategy(df, obi, trend_4h, filters, fr):
     prob = 50.0
     if max_score > 0: prob = 50 + ((abs(score)/max_score)*45)
     thermo_score = (score / max_score) * 100 if max_score > 0 else 0
-    # Filtro con FR para precisión
     if fr is not None:
         if signal == "LONG" and fr > 0.01: signal = "NEUTRO"
         elif signal == "SHORT" and fr < -0.01: signal = "NEUTRO"
-        prob += 5 if abs(fr) < 0.005 else -5  # Ajusta prob con FR saludable
+        prob += 5 if abs(fr) < 0.005 else -5
     return signal, row['ATR'], prob, thermo_score, details
 
 # -----------------------------------------------------------------------------
 # 6. EJECUCIÓN
 # -----------------------------------------------------------------------------
-
 def save_trades(df): df.to_csv(CSV_FILE, index=False)
 
 def execute_trade(type, entry, sl, tp1, tp2, tp3, size, atr, leverage):
@@ -510,23 +585,55 @@ def render_analytics(df_trades):
 # -----------------------------------------------------------------------------
 # 7. DASHBOARD PRINCIPAL
 # -----------------------------------------------------------------------------
-
-df, obi, trend_4h = get_mtf_data(symbol, tf)
+df, cvd, trend_4h, is_liquid, _ = get_mtf_data(symbol, tf)
 if df is not None:
     df = calculate_indicators(df)
     filters = {'use_mtf': use_mtf, 'use_ema': use_ema, 'use_vwap': use_vwap, 'use_ichi': use_ichi, 'use_regime': use_regime, 'use_rsi': use_rsi, 'use_obi': use_obi, 'use_tsi': use_tsi}
+
+    # ATR dinámico (percentil 20)
+    atr_vol_threshold = df['ATR'].quantile(0.2) if len(df) > 20 else 0
+
+    # Derivados
     fr, open_interest, data_src = get_deriv_data(symbol)
-    # DEBUG GLOBAL (para sidebar)
-    fr_debug, oi_debug, src_debug = fr, open_interest, data_src
-    signal, atr, prob, thermo_score, details_list = run_strategy(df, obi, trend_4h, filters, fr)
+
+    # Régimen con ML
+    model, scaler = train_regime_classifier(df)
+    regime = "NEUTRO"
+    if model is not None:
+        last_row = df.iloc[-1]
+        vol = df['close'].pct_change().tail(14).std()
+        trend_flag = 1 if last_row['EMA_20'] > df['EMA_50'].iloc[-1] else 0
+        X = scaler.transform([[vol, last_row['ADX_14'], last_row['RSI'], trend_flag]])
+        pred = model.predict(X)[0]
+        regime = "TREND ↑" if pred == 1 else "TREND ↓" if pred == -1 else "RANGO"
+
+    # Probabilidad bayesiana
+    base_prob = 0.5
+    if fr is not None:
+        if abs(fr) < 0.005: base_prob += 0.1
+        elif abs(fr) > 0.02: base_prob -= 0.15
+    if df['ADX_14'].iloc[-1] > 25: base_prob += 0.1
+    if regime in ["TREND ↑", "TREND ↓"]: base_prob += 0.05
+    bayes_prob = min(0.95, max(0.3, base_prob))
+
+    signal, atr, prob, thermo_score, details_list = run_strategy(df, cvd, trend_4h, filters, fr, is_liquid, atr_vol_threshold)
     current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
     mfi_val, adx_val = df['MFI'].iloc[-1], df['ADX_14'].iloc[-1]
-    # DATOS FIX
     fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
     mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
-    # IA
-    ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest, data_src)
+    ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, cvd, fr, open_interest, data_src, regime, bayes_prob, is_liquid)
+
+    # Backtest on demand
+    if run_backtest_flag:
+        with st.spinner("Ejecutando backtest..."):
+            df_bt, ret, wr, n_trades, exp = run_backtest(df, filters, atr_vol_threshold)
+            if df_bt is not None:
+                st.sidebar.success(f"✅ Backtest Finalizado\nReturn: {ret:.2%}\nWin Rate: {wr:.1%}\nTrades: {n_trades}\nExpectancy: {exp:.4f}")
+            else:
+                st.sidebar.error("Insuficientes datos para backtest")
+
+    # ... resto de la lógica de señales, gestión de trades, UI, etc. (igual que tu original)
     setup = None
     calc_dir = signal 
     setup_type = "CONFIRMED" if signal != "NEUTRO" else "POTENTIAL"
@@ -595,22 +702,18 @@ if df is not None:
             ))
             fig_fng.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
             st.plotly_chart(fig_fng, use_container_width=True)
-        # HTML IA
         st.markdown(ai_html, unsafe_allow_html=True)
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Precio", f"${current_price:,.2f}")
-        # WIDGETS
         if fr is None:
             c2.metric("Funding Rate", "N/A", delta="OFFLINE")
         else:
             c2.metric("Funding Rate", f"{fr:.4f}%", delta=f"{fr:.4f}" if fr > 0 else f"{fr:.4f}", delta_color="inverse")
-        # Formateo Open Interest
         if open_interest is None:
             c3.metric("Open Interest", "N/A")
         else:
             oi_show = f"${open_interest/1e9:.2f}B" if open_interest > 1e9 else f"${open_interest/1e6:.2f}M"
             c3.metric("Open Interest", oi_show)
-        # MTF
         with c4:
             cols = st.columns(3)
             colors = {"BULL": "🟢", "BEAR": "🔴", "NEUTRO": "⚪"}
@@ -687,7 +790,6 @@ if df is not None:
             fig.add_hline(y=setup['sl'], line_dash="dot", line_color="red", row=1, col=1)
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['RSI'], line=dict(color='purple'), name='RSI'), row=2, col=1)
         fig.add_hline(y=70, row=2, col=1); fig.add_hline(y=30, row=2, col=1)
-        # Titulo dinámico
         fig.update_layout(title=f"Chart Source: {source_name}", template="plotly_dark", height=500, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
     with tab2:
