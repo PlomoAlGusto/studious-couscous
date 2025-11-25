@@ -3,6 +3,7 @@ import ccxt
 import pandas as pd
 import pandas_ta as ta
 import plotly.graph_objects as go
+import plotly.express as px
 from plotly.subplots import make_subplots
 from prophet import Prophet
 import requests
@@ -15,7 +16,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v9.1 Nitro", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v10 Legacy", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -68,8 +69,8 @@ if 'balance' not in st.session_state: st.session_state.balance = 10000.0
 # 2. CONFIGURACIÓN (SIDEBAR)
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v9.1")
-    st.caption("Nitro Edition ⛽")
+    st.title("🦁 QUIMERA v10.0")
+    st.caption("Legacy Edition 🏛️")
     
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
@@ -133,7 +134,8 @@ def get_mtf_data(symbol, tf_lower):
         ohlcv_4h = exchange.fetch_ohlcv(ticker_fix, '4h', limit=50)
         df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_4h['EMA_50'] = ta.ema(df_4h['close'], length=50)
-        if df_4h['close'].iloc[-1] > df_4h['EMA_50'].iloc[-1]: trend_4h = "BULLISH"
+        last_4h = df_4h.iloc[-1]
+        if last_4h['close'] > last_4h['EMA_50']: trend_4h = "BULLISH"
         else: trend_4h = "BEARISH"
     except: pass
 
@@ -167,7 +169,7 @@ def calculate_indicators(df):
     adx = ta.adx(df['high'], df['low'], df['close'], length=14)
     df = pd.concat([df, adx], axis=1)
     
-    # --- NUEVO INDICADOR GASOLINA (MFI) ---
+    # GASOLINA
     df['MFI'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
     
     return df.fillna(method='bfill').fillna(method='ffill')
@@ -177,7 +179,6 @@ def generate_ai_analysis(row, trend_4h, obi, signal, prob):
     if trend_4h == "BULLISH": analysis.append("Estructura Macro (4H): ALCISTA.")
     elif trend_4h == "BEARISH": analysis.append("Estructura Macro (4H): BAJISTA.")
     
-    # Analisis de Gasolina
     mfi = row['MFI']
     if mfi > 60: analysis.append("⛽ Mucha gasolina (Dinero entrando).")
     elif mfi < 40: analysis.append("🪫 Poca gasolina (Dinero saliendo).")
@@ -225,7 +226,6 @@ def run_strategy(df, obi, trend_4h, filters):
     if score > threshold: signal = "LONG"
     elif score < -threshold: signal = "SHORT"
     
-    # Vetos
     if filters['use_rsi'] and (row['RSI'] > 70 and signal == "LONG"): signal = "NEUTRO"
     if filters['use_rsi'] and (row['RSI'] < 30 and signal == "SHORT"): signal = "NEUTRO"
     if filters['use_regime'] and row['ADX_14'] < 20: signal = "NEUTRO"
@@ -239,7 +239,7 @@ def run_strategy(df, obi, trend_4h, filters):
     return signal, reasons, row['ATR'], prob
 
 # -----------------------------------------------------------------------------
-# 5. GESTIÓN PAPER TRADING
+# 5. GESTIÓN PAPER TRADING & ANALYTICS (RECUPERADO)
 # -----------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
@@ -269,28 +269,27 @@ def manage_open_positions(current_price):
         row = df.loc[idx]
         close_reason = ""
         pnl = 0
-        
         if use_time_stop:
             df.at[idx, 'candles_held'] += 1
-            if df.at[idx, 'candles_held'] > 12: 
-                current_pnl = (current_price - row['entry']) if row['type'] == "LONG" else (row['entry'] - current_price)
-                if current_pnl <= 0: close_reason = "Time Stop ⏳"
+            if df.at[idx, 'candles_held'] > 12 and (current_price - row['entry']) * (1 if row['type']=="LONG" else -1) <= 0:
+                close_reason = "Time Stop ⏳"
         
         if not close_reason:
+            # Lógica TP/SL/Trailing
             if row['type'] == "LONG":
                 if use_trailing:
                     new_sl = current_price - (row['atr_entry'] * 1.5)
                     if new_sl > row['sl']: df.at[idx, 'sl'] = new_sl
-                if use_breakeven and current_price > (row['entry'] * 1.015):
-                     if row['sl'] < row['entry']: df.at[index, 'sl'] = row['entry']
+                if use_breakeven and current_price > (row['entry'] * 1.015) and row['sl'] < row['entry']: df.at[idx, 'sl'] = row['entry']
+                
                 if current_price >= row['tp3']: close_reason="TP3 🚀"; pnl=(row['tp3']-row['entry'])*row['size']
                 elif current_price <= row['sl']: close_reason="SL 🛑"; pnl=(row['sl']-row['entry'])*row['size']
             else:
                 if use_trailing:
                     new_sl = current_price + (row['atr_entry'] * 1.5)
                     if new_sl < row['sl']: df.at[idx, 'sl'] = new_sl
-                if use_breakeven and current_price < (row['entry'] * 0.985):
-                     if row['sl'] > row['entry']: df.at[index, 'sl'] = row['entry']
+                if use_breakeven and current_price < (row['entry'] * 0.985) and row['sl'] > row['entry']: df.at[idx, 'sl'] = row['entry']
+                
                 if current_price <= row['tp3']: close_reason="TP3 🚀"; pnl=(row['entry']-row['tp3'])*row['size']
                 elif current_price >= row['sl']: close_reason="SL 🛑"; pnl=(row['entry']-row['sl'])*row['size']
 
@@ -306,6 +305,35 @@ def send_telegram_msg(msg):
     if t and c:
         try: requests.get(f"https://api.telegram.org/bot{t}/sendMessage", params={"chat_id": c, "text": msg})
         except: pass
+
+# --- FUNCIÓN DE GRÁFICOS DE RENDIMIENTO (RECUPERADA) ---
+def render_analytics(df_trades):
+    if df_trades.empty:
+        st.info("Esperando operaciones para generar gráficos.")
+        return
+
+    closed = df_trades[df_trades['status'] == 'CLOSED'].copy()
+    if closed.empty:
+        st.info("Aún no has cerrado ninguna operación. Abre y cierra trades para ver tu curva de capital.")
+        return
+
+    # Curva de Capital
+    closed['cumulative_pnl'] = closed['pnl'].cumsum()
+    closed['equity'] = 10000 + closed['cumulative_pnl']
+    
+    # Punto inicial
+    start = pd.DataFrame([{'time': 'Inicio', 'equity': 10000}])
+    curve = pd.concat([start, closed[['time', 'equity']]])
+
+    # KPIs
+    total_profit = closed['pnl'].sum()
+    
+    # Gráfico
+    fig = px.area(curve, x='time', y='equity', title="Crecimiento de la Cuenta (Equity Curve)")
+    fig.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=30,b=0))
+    color = '#00FF00' if total_profit >= 0 else '#FF4444'
+    fig.update_traces(line_color=color, fillcolor=color.replace("FF", "22") if total_profit>=0 else color.replace("44", "11")) # Color suave de relleno
+    st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------------------------
 # 6. DASHBOARD PRINCIPAL
@@ -323,7 +351,7 @@ if df is not None:
     
     signal, reasons, atr, prob = run_strategy(df, obi, trend_4h, filters)
     current_price = df['close'].iloc[-1]
-    mfi_val = df['MFI'].iloc[-1] # Valor Gasolina
+    mfi_val = df['MFI'].iloc[-1]
     
     ai_narrative = generate_ai_analysis(df.iloc[-1], trend_4h, obi, signal, prob)
     news = get_crypto_news()
@@ -390,7 +418,6 @@ Prob: {prob:.1f}% | MFI: {mfi_val:.0f}
         c2.metric("Tendencia 4H", trend_4h, delta="Bullish" if trend_4h=="BULLISH" else "Bearish")
         c3.metric("OBI", f"{obi:.1%}")
         
-        # METRICA DE GASOLINA (MFI)
         gas_state = "⚖️ Neutro"
         if mfi_val > 60: gas_state = "⛽ Tanque Lleno"
         elif mfi_val < 40: gas_state = "🪫 Reserva"
@@ -433,7 +460,6 @@ Prob: {prob:.1f}% | MFI: {mfi_val:.0f}
             fig.add_hline(y=setup['tp1'], line_dash="dot", line_color="green", row=1, col=1)
             fig.add_hline(y=setup['sl'], line_dash="dot", line_color="red", row=1, col=1)
 
-        # Graficar MFI en lugar de RSI si se prefiere, o ambos. Dejamos RSI abajo y añadimos nota.
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['RSI'], line=dict(color='purple'), name='RSI'), row=2, col=1)
         fig.add_hline(y=70, row=2, col=1); fig.add_hline(y=30, row=2, col=1)
         fig.update_layout(height=500, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
@@ -441,18 +467,30 @@ Prob: {prob:.1f}% | MFI: {mfi_val:.0f}
 
     with tab2:
         df_trades = load_trades()
+        
+        st.subheader("📈 Rendimiento")
+        render_analytics(df_trades) # AQUI ESTA EL GRAFICO
+        
+        st.divider()
         if not df_trades.empty:
             open_trades = df_trades[df_trades['status'] == "OPEN"]
             closed_trades = df_trades[df_trades['status'] == "CLOSED"]
             
             st.subheader("🟢 Posiciones Abiertas")
-            st.dataframe(open_trades)
+            st.dataframe(open_trades, use_container_width=True)
             
             st.subheader("📜 Historial Cerrado")
-            st.dataframe(closed_trades)
             
-            total_pnl = closed_trades['pnl'].sum()
-            st.metric("PnL Total", f"${total_pnl:.2f}")
+            # PINTAR DE COLORES LA TABLA DE HISTORIAL
+            def color_pnl(val):
+                color = '#228B22' if val > 0 else '#B22222' if val < 0 else 'white'
+                return f'color: {color}'
+                
+            if not closed_trades.empty:
+                st.dataframe(closed_trades.style.applymap(color_pnl, subset=['pnl']), use_container_width=True)
+                
+                total_pnl = closed_trades['pnl'].sum()
+                st.metric("PnL Total Acumulado", f"${total_pnl:.2f}", delta_color="normal")
         else:
             st.info("Historial vacío.")
 
