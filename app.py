@@ -16,7 +16,7 @@ import base64
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v14.0 Arsenal", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v14.1 Arsenal", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -148,19 +148,22 @@ def play_sound():
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v14.0")
+    st.title("🦁 QUIMERA v14.1")
     st.caption("Full Arsenal Edition ⚔️")
     get_market_sessions()
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
     
+    # --- CORRECCIÓN AQUÍ: Agregados use_rsi y use_obi ---
     with st.expander("🛡️ FILTROS & CORE", expanded=True):
         use_ema = st.checkbox("Tendencia Base (EMAs)", True)
         use_mtf = st.checkbox("Filtro Macro (4H Trend)", True)
         use_vwap = st.checkbox("Filtro VWAP (Institucional)", True)
         use_ichi = st.checkbox("Filtro Nube Ichimoku", False)
         use_regime = st.checkbox("Filtro Anti-Rango (ADX)", True)
+        use_rsi = st.checkbox("Filtro RSI (Sobrecompra/Venta)", False) # Agregado
+        use_obi = st.checkbox("Order Book Imbalance (OBI)", True)      # Agregado
     
     with st.expander("📈 CHART OVERLAYS"):
         show_fib = st.checkbox("Auto Fibonacci", True)
@@ -286,7 +289,7 @@ def run_strategy(df, obi, trend_4h, filters):
         if row['close'] > row['VWAP']: score += 1; details.append("<span class='badge-bull'>VWAP</span>")
         else: score -= 1; details.append("<span class='badge-bear'>VWAP</span>")
         
-    # 4. Order Book
+    # 4. Order Book (USANDO VARIABLE RESTAURADA)
     if filters['use_obi']:
         max_score += 1
         if obi > 0.05: score += 1; details.append("<span class='badge-bull'>OBI</span>")
@@ -302,6 +305,13 @@ def run_strategy(df, obi, trend_4h, filters):
     # Invalidations
     if filters['use_regime'] and row['ADX_14'] < 20: 
         signal = "NEUTRO"; details.append("<span class='badge-neutral'>ADX-LOW</span>")
+        
+    # RSI FILTER (USANDO VARIABLE RESTAURADA)
+    if filters['use_rsi']:
+        if row['RSI'] > 70 and signal == "LONG": 
+            signal = "NEUTRO"; details.append("<span class='badge-neutral'>RSI-MAX</span>")
+        if row['RSI'] < 30 and signal == "SHORT": 
+            signal = "NEUTRO"; details.append("<span class='badge-neutral'>RSI-MIN</span>")
 
     prob = 50.0
     if max_score > 0: prob = 50 + ((abs(score)/max_score)*45)
@@ -361,7 +371,16 @@ df, obi, trend_4h, ob_data = get_mtf_data(symbol, tf)
 
 if df is not None:
     df = calculate_indicators(df)
-    filters = {'use_mtf': use_mtf, 'use_ema': use_ema, 'use_vwap': use_vwap, 'use_ichi': use_ichi, 'use_regime': use_regime, 'use_rsi': False, 'use_obi': use_obi}
+    # DICCIONARIO DE FILTROS ACTUALIZADO
+    filters = {
+        'use_mtf': use_mtf, 
+        'use_ema': use_ema, 
+        'use_vwap': use_vwap, 
+        'use_ichi': use_ichi, 
+        'use_regime': use_regime, 
+        'use_rsi': use_rsi, 
+        'use_obi': use_obi
+    }
     signal, atr, prob, thermo_score, details_list = run_strategy(df, obi, trend_4h, filters)
     current_price = df['close'].iloc[-1]
     
