@@ -133,76 +133,68 @@ def get_market_sessions():
 
 @st.cache_data(ttl=60)
 def get_deriv_data(symbol):
-    # Normaliza para APIs: 'BTC/USDT' -> 'BTCUSDT'
-    api_symbol = symbol.replace('/', '')  # 'BTCUSDT'
+    api_symbol_binance = symbol.replace('/', '')
+    api_symbol_okx = f"{symbol.replace('/', '-')}-SWAP"
+    api_symbol_dydx = symbol.replace('/', '-')
     base = symbol.split('/')[0]
 
-    COINGLASS_API_KEY = st.secrets.get("COINGLASS_API_KEY")
+    COINGLASS_API_KEY = st.secrets.get("COINGLASS_API_KEY", None)
 
-    # 1. Prioridad: Binance Public API (Requests directos, sin CCXT)
+    # 1. Binance
     try:
-        # Funding Rate
-        url_fr = f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={api_symbol}&limit=1"
-        r_fr = requests.get(url_fr, timeout=5).json()
+        r_fr = requests.get(f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={api_symbol_binance}&limit=1", timeout=6).json()
+        r_oi = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={api_symbol_binance}", timeout=6).json()
         fr = float(r_fr[0]['fundingRate']) * 100 if r_fr else None
-        
-        # Open Interest
-        url_oi = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={api_symbol}"
-        r_oi = requests.get(url_oi, timeout=5).json()
-        oi_val = float(r_oi.get('openInterest', 0)) if r_oi else None
-        
-        if fr is not None and oi_val is not None and oi_val > 0:
-            print(f"Binance Success: FR={fr}, OI={oi_val}")  # Debug console
-            return fr, oi_val, "Binance Public API"
-    except Exception as e:
-        print(f"Error Binance Requests: {e}")
+        oi = float(r_oi.get('openInterest', 0)) if r_oi else None
+        if fr is not None and oi is not None and oi > 0:
+            return fr, oi, "Binance"
+    except: pass
 
-    # 2. Fallback: Bybit Public API (Requests directos)
+    # 2. Bybit
     try:
-        # Funding Rate (último)
-        url_fr_bybit = f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={api_symbol}&limit=1"
-        r_fr_bybit = requests.get(url_fr_bybit, timeout=5).json()
-        if r_fr_bybit['retCode'] == 0 and r_fr_bybit['result']['list']:
-            fr = float(r_fr_bybit['result']['list'][0]['fundingRate']) * 100
-        
-        # Open Interest
-        url_oi_bybit = f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={api_symbol}"
-        r_oi_bybit = requests.get(url_oi_bybit, timeout=5).json()
-        if r_oi_bybit['retCode'] == 0:
-            oi_val = float(r_oi_bybit['result']['list'][0]['openInterest'])
-        
-        if fr is not None and oi_val is not None and oi_val > 0:
-            print(f"Bybit Success: FR={fr}, OI={oi_val}")
-            return fr, oi_val, "Bybit Public API"
-    except Exception as e:
-        print(f"Error Bybit Requests: {e}")
+        r_fr = requests.get(f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={api_symbol_binance}&limit=1", timeout=6).json()
+        r_oi = requests.get(f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={api_symbol_binance}", timeout=6).json()
+        fr = float(r_fr['result']['list'][0]['fundingRate']) * 100 if r_fr.get('retCode') == 0 and r_fr['result']['list'] else None
+        oi = float(r_oi['result']['list'][0]['openInterest']) if r_oi.get('retCode') == 0 and r_oi['result']['list'] else None
+        if fr is not None and oi is not None and oi > 0:
+            return fr, oi, "Bybit"
+    except: pass
 
-    # 3. Fallback: CoinGlass (Si key válida)
+    # 3. CoinGlass (si tienes key)
     if COINGLASS_API_KEY:
         try:
             headers = {"coinglassSecret": COINGLASS_API_KEY}
-            url_fr = f"https://open-api.coinglass.com/public/v2/funding?symbol={base}"
-            r_fr = requests.get(url_fr, headers=headers, timeout=5).json()
-            url_oi = f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base}"
-            r_oi = requests.get(url_oi, headers=headers, timeout=5).json()
-            
-            avg_fr = 0.0
-            total_oi = 0.0
-            if r_fr.get('success') and r_fr.get('data'):
-                fr_list = [ex['uMarginList'][0]['rate'] * 100 for ex in r_fr['data'] if ex['uMarginList']]
-                avg_fr = np.mean(fr_list) if fr_list else None
-            if r_oi.get('success') and r_oi.get('data'):
-                total_oi = sum(ex.get('openInterestAmount', 0) * ex.get('price', 1) for ex in r_oi['data'])
-            
-            if avg_fr is not None and total_oi > 0:
-                print(f"CoinGlass Success: FR={avg_fr}, OI={total_oi}")
-                return avg_fr, total_oi, "CoinGlass"
-        except Exception as e:
-            print(f"Error CoinGlass: {e}")
+            r_fr = requests.get(f"https://open-api.coinglass.com/public/v2/funding?symbol={base}", headers=headers, timeout=6).json()
+            r_oi = requests.get(f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base}", headers=headers, timeout=6).json()
+            fr_list = [ex['uMarginList'][0]['rate'] * 100 for ex in r_fr.get('data', []) if ex.get('uMarginList')]
+            oi_total = sum(ex.get('openInterestAmount', 0) * ex.get('price', 1) for ex in r_oi.get('data', []))
+            fr = np.mean(fr_list) if fr_list else None
+            if fr is not None and oi_total > 0:
+                return fr, oi_total, "CoinGlass"
+        except: pass
 
-    print("All Deriv Fallbacks Failed - OFFLINE")  # Debug
+    # 4. OKX — LA QUE NUNCA FALLA
+    try:
+        inst = f"{symbol.split('/')[0]}-{symbol.split('/')[1]}-SWAP"
+        r_fr = requests.get(f"https://www.okx.com/api/v5/public/funding-rate?instId={inst}", timeout=6).json()
+        r_oi = requests.get(f"https://www.okx.com/api/v5/public/open-interest?instId={inst}", timeout=6).json()
+        if r_fr['code'] == '0' and r_fr['data']:
+            fr = float(r_fr['data'][0]['fundingRate']) * 100
+        if r_oi['code'] == '0' and r_oi['data']:
+            oi = float(r_oi['data'][0]['openInterest'])
+        if fr is not None and oi is not None:
+            return fr, oi, "OKX"
+    except: pass
+
+    # 5. dYdX (solo FR como último recurso)
+    try:
+        r = requests.get(f"https://indexer.dydx.exchange/v4/historicalFunding/{api_symbol_dydx}?limit=1", timeout=6).json()
+        if r and 'historicalFunding' in r and r['historicalFunding']:
+            fr = float(r['historicalFunding'][0]['rate']) * 100
+            return fr, 0, "dYdX (solo FR)"
+    except: pass
+
     return None, None, "OFFLINE"
-
 @st.cache_data(ttl=30)
 def get_mtf_trends_analysis(symbol):
     ex = ccxt.binance()
