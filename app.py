@@ -14,7 +14,7 @@ import os
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v6.0 Institutional", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v6.1", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -41,24 +41,23 @@ st.markdown("""
 # GESTIÓN DE ARCHIVOS (PERSISTENCIA CSV)
 CSV_FILE = 'paper_trades.csv'
 if not os.path.exists(CSV_FILE):
-    df_empty = pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held"])
+    df_empty = pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
     df_empty.to_csv(CSV_FILE, index=False)
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
-if 'balance' not in st.session_state: st.session_state.balance = 10000.0
 
 # -----------------------------------------------------------------------------
 # 2. CAPA DE CONFIGURACIÓN (SIDEBAR MODULAR)
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v6.0")
+    st.title("🦁 QUIMERA v6.1")
     st.caption("Institutional Architect")
     
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
 
     with st.expander("🛡️ GRUPO A: FILTROS ESTRUCTURA", expanded=True):
-        use_mtf = st.checkbox("Filtro Macro (4H Trend)", True, help="Solo opera a favor de la tendencia de 4 horas.")
+        use_mtf = st.checkbox("Filtro Macro (4H Trend)", True)
         use_vwap = st.checkbox("Filtro VWAP (Institucional)", True)
         use_ichi = st.checkbox("Filtro Nube Ichimoku", False)
         use_regime = st.checkbox("Filtro Anti-Rango (ADX)", True)
@@ -152,39 +151,39 @@ def calculate_indicators(df):
 
 def get_ai_advice(row, trend_4h, obi):
     advice = []
-    if row['ADX_14'] < 20: advice.append("⚠️ Mercado Lateral: Cuidado con falsas rupturas.")
-    if trend_4h == "BULLISH": advice.append("✅ Tendencia Macro (4H) Alcista: Prioriza Longs.")
-    elif trend_4h == "BEARISH": advice.append("🔻 Tendencia Macro (4H) Bajista: Prioriza Shorts.")
-    if abs(obi) > 0.1: advice.append("🔥 Fuerte presión en el libro de órdenes.")
+    if row['ADX_14'] < 20: advice.append("⚠️ Lateral: Riesgo de falsas señales.")
+    if trend_4h == "BULLISH": advice.append("✅ Macro 4H Alcista: Prioriza Longs.")
+    elif trend_4h == "BEARISH": advice.append("🔻 Macro 4H Bajista: Prioriza Shorts.")
+    if abs(obi) > 0.1: advice.append("🔥 Volumen fuerte en libro.")
     return " | ".join(advice)
 
-def run_strategy(df, obi, trend_4h):
+def run_strategy(df, obi, trend_4h, filters): # AÑADIDO FILTERS AQUÍ
     row = df.iloc[-1]
     score = 0
     max_score = 0
     reasons = []
 
     # 1. MTF (El Rey de los Filtros)
-    if use_mtf:
-        max_score += 2 # Pesa doble
+    if filters['use_mtf']:
+        max_score += 2
         if trend_4h == "BULLISH": score += 2
         elif trend_4h == "BEARISH": score -= 2
-        else: max_score -= 2 # Si no hay datos 4h, anulamos peso
+        else: max_score -= 2 
 
     # 2. EMAs
-    if use_ema:
+    if filters['use_ema']: # Ahora usa filters['use_ema']
         max_score += 1
         if row['EMA_20'] > row['EMA_50']: score += 1; reasons.append("Cruce EMA")
         else: score -= 1
 
     # 3. VWAP
-    if use_vwap:
+    if filters['use_vwap']:
         max_score += 1
         if row['close'] > row['VWAP']: score += 1; reasons.append("VWAP Support")
         else: score -= 1
         
     # 4. OBI
-    if use_obi:
+    if filters['use_obi']:
         max_score += 1
         if obi > 0.05: score += 1; reasons.append("OrderBook Bull")
         elif obi < -0.05: score -= 1
@@ -196,13 +195,13 @@ def run_strategy(df, obi, trend_4h):
     elif score < -threshold: signal = "SHORT"
     
     # Veto: RSI y Régimen
-    if use_rsi and (row['RSI'] > 70 and signal == "LONG"): signal = "NEUTRO"
-    if use_rsi and (row['RSI'] < 30 and signal == "SHORT"): signal = "NEUTRO"
-    if use_regime and row['ADX_14'] < 20: signal = "NEUTRO"; reasons = ["Rango (ADX < 20)"]
+    if filters['use_rsi'] and (row['RSI'] > 70 and signal == "LONG"): signal = "NEUTRO"
+    if filters['use_rsi'] and (row['RSI'] < 30 and signal == "SHORT"): signal = "NEUTRO"
+    if filters['use_regime'] and row['ADX_14'] < 20: signal = "NEUTRO"; reasons = ["Rango (ADX < 20)"]
     
     # Conflictos MTF
-    if use_mtf and signal == "LONG" and trend_4h == "BEARISH": signal = "NEUTRO"; reasons = ["Contra Tendencia 4H"]
-    if use_mtf and signal == "SHORT" and trend_4h == "BULLISH": signal = "NEUTRO"; reasons = ["Contra Tendencia 4H"]
+    if filters['use_mtf'] and signal == "LONG" and trend_4h == "BEARISH": signal = "NEUTRO"; reasons = ["Contra Tendencia 4H"]
+    if filters['use_mtf'] and signal == "SHORT" and trend_4h == "BULLISH": signal = "NEUTRO"; reasons = ["Contra Tendencia 4H"]
 
     prob = 50.0
     if max_score > 0: prob = 50 + ((abs(score)/max_score)*45)
@@ -213,7 +212,8 @@ def run_strategy(df, obi, trend_4h):
 # 5. MOTOR DE PAPER TRADING (PERSISTENTE CSV)
 # -----------------------------------------------------------------------------
 def load_trades():
-    return pd.read_csv(CSV_FILE)
+    if os.path.exists(CSV_FILE): return pd.read_csv(CSV_FILE)
+    return pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
 
 def save_trades(df):
     df.to_csv(CSV_FILE, index=False)
@@ -237,28 +237,31 @@ def execute_trade(type, entry, sl, tp1, tp2, tp3, size, atr):
         "candles_held": 0,
         "atr_entry": atr
     }
-    df = pd.concat([pd.DataFrame([new_trade]), df], ignore_index=True)
+    # Concatenar usando pd.concat en lugar de append
+    new_row = pd.DataFrame([new_trade])
+    df = pd.concat([new_row, df], ignore_index=True)
     save_trades(df)
     return new_trade
 
 def manage_open_positions(current_price):
     df = load_trades()
-    open_trades = df[df['status'] == "OPEN"]
+    if df.empty: return
     
-    if open_trades.empty: return
+    open_trades_idx = df.index[df['status'] == "OPEN"].tolist()
+    if not open_trades_idx: return
 
-    for index, row in open_trades.iterrows():
+    updated = False
+    for idx in open_trades_idx:
+        row = df.loc[idx]
         close_reason = ""
         pnl = 0
         
-        # 1. Time Stop Check
+        # 1. Time Stop
         if use_time_stop:
-            df.at[index, 'candles_held'] += 1
-            if df.at[index, 'candles_held'] > 12: # 12 velas sin profit
-                # Check si estamos en pérdida
+            df.at[idx, 'candles_held'] += 1
+            if df.at[idx, 'candles_held'] > 12:
                 current_pnl = (current_price - row['entry']) if row['type'] == "LONG" else (row['entry'] - current_price)
-                if current_pnl <= 0:
-                    close_reason = "Time Stop ⏳"
+                if current_pnl <= 0: close_reason = "Time Stop ⏳"
         
         # 2. Logic Updates
         if not close_reason:
@@ -266,10 +269,10 @@ def manage_open_positions(current_price):
                 # Trailing
                 if use_trailing:
                     new_sl = current_price - (row['atr_entry'] * 1.5)
-                    if new_sl > row['sl']: df.at[index, 'sl'] = new_sl
+                    if new_sl > row['sl']: df.at[idx, 'sl'] = new_sl
                 # Breakeven
                 if use_breakeven and current_price > (row['entry'] * 1.015):
-                     if row['sl'] < row['entry']: df.at[index, 'sl'] = row['entry']
+                     if row['sl'] < row['entry']: df.at[idx, 'sl'] = row['entry']
                 
                 # Exits
                 if current_price >= row['tp3']: close_reason = "TP3 Moon 🚀"; pnl = (row['tp3']-row['entry'])*row['size']
@@ -278,21 +281,23 @@ def manage_open_positions(current_price):
             else: # SHORT
                 if use_trailing:
                     new_sl = current_price + (row['atr_entry'] * 1.5)
-                    if new_sl < row['sl']: df.at[index, 'sl'] = new_sl
+                    if new_sl < row['sl']: df.at[idx, 'sl'] = new_sl
                 if use_breakeven and current_price < (row['entry'] * 0.985):
-                     if row['sl'] > row['entry']: df.at[index, 'sl'] = row['entry']
+                     if row['sl'] > row['entry']: df.at[idx, 'sl'] = row['entry']
 
                 if current_price <= row['tp3']: close_reason = "TP3 Moon 🚀"; pnl = (row['entry']-row['tp3'])*row['size']
                 elif current_price >= row['sl']: close_reason = "SL 🛑"; pnl = (row['entry']-row['sl'])*row['size']
 
         if close_reason:
-            df.at[index, 'status'] = "CLOSED"
-            df.at[index, 'pnl'] = pnl
-            df.at[index, 'reason'] = close_reason
+            df.at[idx, 'status'] = "CLOSED"
+            df.at[idx, 'pnl'] = pnl
+            df.at[idx, 'reason'] = close_reason
             st.toast(f"Posición Cerrada: {close_reason}")
             send_telegram_msg(f"💰 CIERRE {symbol}: {close_reason}\nPnL: ${pnl:.2f}")
+            updated = True
 
-    save_trades(df)
+    if updated or use_time_stop: # Guardar si hubo cambios o si actualizamos velas
+        save_trades(df)
 
 def send_telegram_msg(msg):
     t, c = st.secrets.get("TELEGRAM_TOKEN", ""), st.secrets.get("TELEGRAM_CHAT_ID", "")
@@ -307,7 +312,15 @@ df, obi, trend_4h = get_mtf_data(symbol, tf)
 
 if df is not None:
     df = calculate_indicators(df)
-    signal, reasons, atr, prob = run_strategy(df, obi, trend_4h)
+    
+    # Empaquetamos filtros para evitar errores de scope
+    filters = {
+        'use_mtf': use_mtf, 'use_ema': use_ema, 'use_vwap': use_vwap,
+        'use_ichi': use_ichi, 'use_regime': use_regime, 'use_rsi': use_rsi,
+        'use_obi': use_obi
+    }
+    
+    signal, reasons, atr, prob = run_strategy(df, obi, trend_4h, filters)
     current_price = df['close'].iloc[-1]
     
     # Copilot Advice
@@ -330,7 +343,7 @@ if df is not None:
 
     # Alertas
     if signal != "NEUTRO" and signal != st.session_state.last_alert:
-        send_telegram_msg(f"🦁 v6.0 PRO: {signal} {symbol}\nMTF 4H: {trend_4h}\nProb: {prob:.1f}%")
+        send_telegram_msg(f"🦁 v6.0: {signal} {symbol}\nMTF 4H: {trend_4h}\nProb: {prob:.1f}%")
         st.session_state.last_alert = signal
     elif signal == "NEUTRO": st.session_state.last_alert = "NEUTRO"
     
@@ -386,21 +399,22 @@ if df is not None:
 
     with tab2:
         df_trades = load_trades()
-        open_trades = df_trades[df_trades['status'] == "OPEN"]
-        closed_trades = df_trades[df_trades['status'] == "CLOSED"]
-        
-        st.subheader("🟢 Posiciones Abiertas (Vigiladas por TimeStop)")
-        if not open_trades.empty:
-            st.dataframe(open_trades[['time', 'symbol', 'type', 'entry', 'sl', 'tp3', 'candles_held']])
-        else: st.info("No hay operaciones en curso.")
-        
-        st.subheader("📜 Historial Cerrado")
-        st.dataframe(closed_trades[['time', 'symbol', 'type', 'pnl', 'reason']])
-        
-        # Metrics
-        if not closed_trades.empty:
+        if not df_trades.empty:
+            open_trades = df_trades[df_trades['status'] == "OPEN"]
+            closed_trades = df_trades[df_trades['status'] == "CLOSED"]
+            
+            st.subheader("🟢 Posiciones Abiertas")
+            if not open_trades.empty:
+                st.dataframe(open_trades[['time', 'symbol', 'type', 'entry', 'sl', 'tp3', 'candles_held']])
+            else: st.info("No hay operaciones en curso.")
+            
+            st.subheader("📜 Historial Cerrado")
+            st.dataframe(closed_trades[['time', 'symbol', 'type', 'pnl', 'reason']])
+            
             total_pnl = closed_trades['pnl'].sum()
             st.metric("PnL Total Acumulado", f"${total_pnl:.2f}")
+        else:
+            st.info("El historial está vacío. Ejecuta tu primera operación.")
 
 else: st.warning("Cargando Motores MTF...")
 
