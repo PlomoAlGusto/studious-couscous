@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v16.0 Production", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v16.1 Copilot+", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -30,18 +30,25 @@ st.markdown("""
     .entry-blue { color: #44AAFF; font-weight: bold; font-size: 18px; }
     .label-mini { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px;}
     
+    /* CAJA IA REFINADA */
     .ai-box {
         background-color: #111; 
-        border-left: 4px solid #44AAFF; 
-        padding: 15px; 
-        border-radius: 5px; 
-        margin-bottom: 15px; 
-        font-family: 'Courier New', monospace;
-        font-size: 13px;
+        border-left: 5px solid #44AAFF; 
+        padding: 20px; 
+        border-radius: 8px; 
+        margin-bottom: 20px; 
+        font-family: 'Segoe UI', 'Roboto', sans-serif;
+        font-size: 14px;
         color: #ddd;
-        line-height: 1.5;
+        line-height: 1.8;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.5);
     }
-    .ai-title { color: #44AAFF; font-weight: bold; font-size: 14px; margin-bottom: 5px; display: block; }
+    .ai-title { color: #44AAFF; font-weight: 900; font-size: 16px; margin-bottom: 10px; display: block; letter-spacing: 1px; text-transform: uppercase;}
+    .ai-row { display: flex; margin-bottom: 8px; align-items: center; }
+    .ai-icon { margin-right: 10px; font-size: 18px; width: 25px; text-align: center;}
+    .ai-label { font-weight: bold; color: #888; margin-right: 5px; min-width: 100px; }
+    .ai-value { color: #fff; }
+    .ai-verdict { margin-top: 15px; padding-top: 10px; border-top: 1px solid #333; font-size: 16px; font-weight: bold; }
     
     .market-clock { font-size: 12px; padding: 5px; margin-bottom: 5px; border-radius: 4px; display: flex; justify-content: space-between;}
     .clock-open { background-color: rgba(0, 255, 0, 0.2); border: 1px solid #00FF00; }
@@ -71,14 +78,14 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
-# CLAVE API (Fallback Hardcoded si no está en secrets)
+# API KEY
 try:
     COINGLASS_API_KEY = st.secrets.get("COINGLASS_KEY", "1d4579f4c59149c6b6a1d83494a4f67c")
 except:
     COINGLASS_API_KEY = "1d4579f4c59149c6b6a1d83494a4f67c"
 
 # -----------------------------------------------------------------------------
-# 2. MOTOR DE DATOS (FUNCIONES ROBUSTAS)
+# 2. MOTOR DE DATOS
 # -----------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=COLUMNS_DB)
@@ -112,7 +119,6 @@ def get_market_sessions():
         css_class = "clock-open" if is_open else "clock-closed"
         st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{status_icon}</span></div>", unsafe_allow_html=True)
 
-# --- FUNCIÓN RECUPERADA Y CORREGIDA ---
 @st.cache_data(ttl=3600) 
 def get_fear_and_greed():
     try:
@@ -121,12 +127,11 @@ def get_fear_and_greed():
         data = r.json()['data'][0]
         return int(data['value']), data['value_classification']
     except: return 50, "Neutral"
-# -------------------------------------
 
 @st.cache_data(ttl=120)
 def get_deriv_data(symbol):
     base_coin = symbol.split('/')[0]
-    headers_browser = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+    headers_browser = {'User-Agent': 'Mozilla/5.0'}
     
     # 1. COINGLASS
     if COINGLASS_API_KEY:
@@ -192,7 +197,7 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v16.0")
+    st.title("🦁 QUIMERA v16.1")
     st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
     get_market_sessions()
     st.divider()
@@ -304,9 +309,10 @@ def calculate_indicators(df):
     return df.fillna(method='bfill').fillna(method='ffill')
 
 # -----------------------------------------------------------------------------
-# 5. IA ANALISTA
+# 5. IA ANALISTA (REFINADA)
 # -----------------------------------------------------------------------------
-def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src):
+def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src, signal, prob):
+    # 1. CONTEXTO MULTI-TIMEFRAME
     t_15m = mtf_trends.get('15m', 'NEUTRO')
     t_1h = mtf_trends.get('1h', 'NEUTRO')
     t_4h = mtf_trends.get('4h', 'NEUTRO')
@@ -317,36 +323,45 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     elif t_4h == "BEAR" and t_15m == "BULL": context = "<span style='color:#FFFF00'>REBOTE TÉCNICO</span> (Macro Bajista / Micro Alcista)"
     else: context = "MERCADO MIXTO (Conflicto de Temporalidades)"
     
-    deriv_txt = f"Funding Rate: <b style='color:#fff'>{fr:.4f}%</b>"
-    if fr > 0.01: deriv_txt += " (Long Squeeze Risk)"
-    elif fr < -0.01: deriv_txt += " (Short Squeeze Risk)"
-    else: deriv_txt += " (Saludable)"
+    # 2. DATOS DERIVADOS
+    deriv_txt = f"{fr:.4f}%"
+    fr_color = "#FF4444" if abs(fr) > 0.01 else "#00FF00"
     
     if open_interest > 1000000000: oi_fmt = f"${open_interest/1000000000:.2f}B"
     elif open_interest > 1000000: oi_fmt = f"${open_interest/1000000:.2f}M"
     else: oi_fmt = f"${open_interest:,.0f}"
     
-    oi_txt = f"Interés Abierto: <b style='color:#44AAFF'>{oi_fmt}</b>"
-
+    # 3. MOMENTO (TSI / MFI / ADX)
     mfi = row['MFI']
     adx = row['ADX_14']
     tsi = row['TSI']
-    gas_status = "LLENO (Alta Demanda)" if mfi > 60 else "RESERVA (Baja Demanda)" if mfi < 40 else "MEDIO"
+    
+    gas_status = "LLENO" if mfi > 60 else "RESERVA" if mfi < 40 else "MEDIO"
     gas_color = "#00FF00" if mfi > 60 else "#FF4444" if mfi < 40 else "#FFF"
     tsi_status = "ALCISTA" if tsi > 0 else "BAJISTA"
-    mom_txt = f"Gasolina (MFI): <b style='color:{gas_color}'>{gas_status}</b>. ADX: {adx:.1f}. TSI: {tsi_status} ({tsi:.2f})."
-
+    
+    # 4. FLUJO (OBI)
     pressure = "COMPRADORA" if obi > 0.05 else "VENDEDORA" if obi < -0.05 else "NEUTRA"
     obi_color = "#00FF00" if obi > 0.05 else "#FF4444" if obi < -0.05 else "#aaa"
-    obi_txt = f"Presión Libro: <b style='color:{obi_color}'>{pressure}</b> ({obi*100:.1f}%)"
+    
+    # 5. VEREDICTO FINAL
+    if signal == "LONG":
+        verdict = f"🎯 VEREDICTO: <span style='color:#00FF00'>⬆️ LONG</span> (Prob: {prob:.1f}%)"
+    elif signal == "SHORT":
+        verdict = f"🎯 VEREDICTO: <span style='color:#FF4444'>⬇️ SHORT</span> (Prob: {prob:.1f}%)"
+    else:
+        verdict = f"⏳ VEREDICTO: <span style='color:#888'>ESPERAR CONFIRMACIÓN</span>"
 
     html = f"""
     <div class='ai-box'>
-        <span class='ai-title'>🤖 QUIMERA COPILOT (Data Source: {data_src}):</span>
-        <div style='margin-top:5px;'>📡 <b>ESTRUCTURA:</b> {context}</div>
-        <div>📊 <b>DERIVADOS:</b> {deriv_txt}. {oi_txt}</div>
-        <div>🔥 <b>MOMENTO:</b> {mom_txt}</div>
-        <div>⛽ <b>VOLUMEN:</b> {obi_txt}</div>
+        <span class='ai-title'>🤖 QUIMERA COPILOT <span style='font-size:10px; color:#666;'>(Data: {data_src})</span></span>
+        
+        <div class='ai-row'><span class='ai-icon'>📡</span><span class='ai-label'>ESTRUCTURA:</span> <span class='ai-value'>{context}</span></div>
+        <div class='ai-row'><span class='ai-icon'>📊</span><span class='ai-label'>DERIVADOS:</span> <span class='ai-value'>Funding: <b style='color:{fr_color}'>{deriv_txt}</b> | OI: <b style='color:#44AAFF'>{oi_fmt}</b></span></div>
+        <div class='ai-row'><span class='ai-icon'>🔥</span><span class='ai-label'>MOMENTO:</span> <span class='ai-value'>Gasolina: <b style='color:{gas_color}'>{gas_status}</b> | TSI: {tsi_status} ({tsi:.2f}) | ADX: {adx:.1f}</span></div>
+        <div class='ai-row'><span class='ai-icon'>⛽</span><span class='ai-label'>LIBRO:</span> <span class='ai-value'>Presión <b style='color:{obi_color}'>{pressure}</b> ({obi*100:.1f}%)</span></div>
+        
+        <div class='ai-verdict'>{verdict}</div>
     </div>
     """
     return html
@@ -488,8 +503,8 @@ if df is not None:
     fr, open_interest, data_src = get_deriv_data(symbol)
     mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
     
-    # IA (HTML Correcto + TSI)
-    ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest, data_src)
+    # IA (HTML REFINADO)
+    ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest, data_src, signal, prob)
     
     setup = None
     calc_dir = signal 
@@ -659,9 +674,6 @@ if df is not None:
         else: st.info("Esperando estructura de mercado clara...")
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-        # -----------------------------------------------------------
-        # CORRECCIÓN AQUI: Se elimina la duplicación de "name="
-        # -----------------------------------------------------------
         fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name=f'{source_name} Data'), row=1, col=1)
         if use_vwap: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
         last_pivot, last_s1, last_r1 = df.iloc[-1]['PIVOT'], df.iloc[-1]['S1'], df.iloc[-1]['R1']
