@@ -15,52 +15,18 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v16.3 Fix", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v16.4 Visual Fix", layout="wide", page_icon="🦁")
 
+# CSS MÍNIMO (Solo para lo esencial)
 st.markdown("""
 <style>
-    .metric-card {background-color: #262730; padding: 10px; border-radius: 8px; border: 1px solid #444;}
-    .trade-setup {
-        background-color: #151515; padding: 20px; border-radius: 15px; border: 1px solid #444;
-        margin-top: 10px; margin-bottom: 20px; text-align: center;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-    }
-    .tp-green { color: #00FF00; font-weight: bold; font-size: 18px; }
-    .sl-red { color: #FF4444; font-weight: bold; font-size: 18px; }
-    .entry-blue { color: #44AAFF; font-weight: bold; font-size: 18px; }
-    .label-mini { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px;}
+    .stMetric { background-color: #111; padding: 10px; border-radius: 5px; border: 1px solid #333; }
+    .market-clock { font-size: 12px; padding: 5px; margin-bottom: 5px; border-radius: 4px; display: flex; justify-content: space-between; border: 1px solid #333; }
+    .clock-open { background-color: rgba(0, 255, 0, 0.1); border-color: #00FF00; }
+    .clock-closed { background-color: rgba(255, 255, 255, 0.05); }
     
-    /* CAJA IA ROBUSTA (HTML SIMPLIFICADO) */
-    .ai-container {
-        background-color: #111; 
-        border-left: 5px solid #44AAFF; 
-        padding: 15px; 
-        border-radius: 5px; 
-        margin-bottom: 15px; 
-        font-family: sans-serif;
-        font-size: 14px;
-        line-height: 1.6;
-        color: #eee;
-    }
-    .ai-header { color: #44AAFF; font-weight: 900; font-size: 16px; margin-bottom: 8px; display: block; }
-    .ai-line { margin-bottom: 4px; }
-    .ai-verdict-box { 
-        margin-top: 10px; 
-        padding-top: 10px; 
-        border-top: 1px solid #333; 
-        font-size: 16px; 
-        font-weight: bold; 
-    }
-    
-    .market-clock { font-size: 12px; padding: 5px; margin-bottom: 5px; border-radius: 4px; display: flex; justify-content: space-between;}
-    .clock-open { background-color: rgba(0, 255, 0, 0.2); border: 1px solid #00FF00; }
-    .clock-closed { background-color: rgba(255, 0, 0, 0.1); border: 1px solid #555; color: #888; }
-    
-    .status-dot-on { color: #00FF00; font-weight: bold; text-shadow: 0 0 5px #00FF00; }
-    
-    .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
-    .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
-    .badge-neutral { background-color: #333; color: #aaa; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #555; margin-right: 4px; }
+    /* Estilo para la caja de IA nativa */
+    .ai-container { border: 1px solid #44AAFF; border-left: 5px solid #44AAFF; background-color: #0e1117; padding: 20px; border-radius: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -75,14 +41,8 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
-# API KEY
-try:
-    COINGLASS_API_KEY = st.secrets.get("COINGLASS_KEY", "1d4579f4c59149c6b6a1d83494a4f67c")
-except:
-    COINGLASS_API_KEY = "1d4579f4c59149c6b6a1d83494a4f67c"
-
 # -----------------------------------------------------------------------------
-# 2. MOTOR DE DATOS
+# 2. MOTOR DE DATOS (BYBIT V5 - ROBUSTO)
 # -----------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=COLUMNS_DB)
@@ -109,67 +69,42 @@ def get_market_sessions():
     sessions = {"🇬🇧 LONDRES": (8, 16), "🇺🇸 NEW YORK": (13, 21), "🇯🇵 TOKYO": (0, 9), "🇦🇺 SYDNEY": (22, 7)}
     st.sidebar.markdown("### 🌍 SESIONES")
     for name, (start, end) in sessions.items():
-        is_open = False
-        if start < end: is_open = start <= hour < end
-        else: is_open = hour >= start or hour < end
-        status_icon = "🟢 ABIERTO" if is_open else "🔴 CERRADO"
+        is_open = start <= hour < end
         css_class = "clock-open" if is_open else "clock-closed"
-        st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{status_icon}</span></div>", unsafe_allow_html=True)
+        icon = "🟢" if is_open else "🔴"
+        st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{icon}</span></div>", unsafe_allow_html=True)
 
-@st.cache_data(ttl=3600) 
-def get_fear_and_greed():
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get("https://api.alternative.me/fng/", headers=headers, timeout=5)
-        data = r.json()['data'][0]
-        return int(data['value']), data['value_classification']
-    except: return 50, "Neutral"
-
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=60)
 def get_deriv_data(symbol):
+    """
+    Obtiene Funding Rate y Open Interest usando BYBIT V5 (Público y Estable).
+    """
     base_coin = symbol.split('/')[0]
-    headers_browser = {'User-Agent': 'Mozilla/5.0'}
     
-    # 1. COINGLASS
-    if COINGLASS_API_KEY:
-        try:
-            headers_cg = {"coinglassSecret": COINGLASS_API_KEY}
-            url_oi = f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base_coin}"
-            r_oi = requests.get(url_oi, headers=headers_cg, timeout=3).json()
-            url_fr = f"https://open-api.coinglass.com/public/v2/funding?symbol={base_coin}"
-            r_fr = requests.get(url_fr, headers=headers_cg, timeout=3).json()
-            
-            total_oi = 0.0
-            avg_fr = 0.0
-            
-            if r_oi.get('success'):
-                for ex in r_oi['data']: total_oi += ex.get('openInterestAmount', 0) * ex.get('price', 0)
-            
-            if r_fr.get('success'):
-                for ex in r_fr['data']:
-                    if ex['exchangeName'] == 'Binance':
-                        if 'uMarginList' in ex and len(ex['uMarginList']) > 0: avg_fr = ex['uMarginList'][0]['rate']
-                        break
-            if total_oi > 0: return avg_fr, total_oi, "CoinGlass"
-        except: pass
-
-    # 2. BYBIT
+    # INTENTO 1: BYBIT V5 (Suele funcionar siempre)
     try:
         url = f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_coin}USDT"
-        r = requests.get(url, headers=headers_browser, timeout=3).json()
+        r = requests.get(url, timeout=4).json()
         if r['retCode'] == 0:
             info = r['result']['list'][0]
-            return float(info['fundingRate']) * 100, float(info['openInterestValue']), "Bybit"
-    except: pass
+            fr = float(info['fundingRate']) * 100
+            oi_val = float(info['openInterestValue'])
+            return fr, oi_val, "Bybit"
+    except:
+        pass
 
-    # 3. DYDX
+    # INTENTO 2: BINANCE (Fallback)
     try:
-        dydx_symbol = f"{base_coin}-USD"
-        url = f"https://api.dydx.exchange/v3/markets/{dydx_symbol}"
-        r = requests.get(url, headers=headers_browser, timeout=3).json()
-        market = r['market']
-        return float(market['nextFundingRate']) * 100, float(market['openInterest']), "dYdX"
-    except: pass
+        url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={base_coin}USDT"
+        r = requests.get(url, timeout=4).json()
+        fr = float(r['lastFundingRate']) * 100
+        
+        url_oi = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={base_coin}USDT"
+        r_oi = requests.get(url_oi, timeout=4).json()
+        oi_val = float(r_oi['openInterest']) * float(r['markPrice'])
+        return fr, oi_val, "Binance"
+    except:
+        pass
 
     return 0.0, 0.0, "Error"
 
@@ -194,8 +129,8 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v16.3")
-    st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
+    st.title("🦁 QUIMERA v16.4")
+    st.success("● SYSTEM ONLINE")
     get_market_sessions()
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT")
@@ -215,7 +150,7 @@ with st.sidebar:
         
     with st.expander("💰 GESTIÓN DE RIESGO"):
         current_balance = get_current_balance()
-        st.metric("Balance Disponible", f"${current_balance:,.2f}", delta=f"{current_balance-INITIAL_CAPITAL:.2f}")
+        st.metric("Balance Disponible", f"${current_balance:,.2f}")
         risk_per_trade = st.slider("Riesgo por Trade (%)", 0.5, 5.0, 1.0)
         
     with st.expander("⚙️ SALIDAS"):
@@ -230,14 +165,8 @@ with st.sidebar:
 # 4. CAPA DE DATOS
 # -----------------------------------------------------------------------------
 def init_exchange():
-    try:
-        if "BINANCE_API_KEY" in st.secrets:
-            ex = ccxt.binance({'apiKey': st.secrets["BINANCE_API_KEY"], 'secret': st.secrets["BINANCE_SECRET"], 'options': {'defaultType': 'spot'}})
-            ex.load_markets(); return ex, "Binance (Priv)"
-    except: pass
-    try:
-        ex = ccxt.binance(); ex.load_markets(); return ex, "Binance (Pub)"
-    except: return ccxt.kraken(), "Kraken (Fallback)"
+    try: return ccxt.binance(), "Binance"
+    except: return ccxt.kraken(), "Kraken"
 
 exchange, source_name = init_exchange()
 
@@ -251,7 +180,7 @@ def get_crypto_news():
 @st.cache_data(ttl=15)
 def get_mtf_data(symbol, tf_lower):
     if not exchange: return None, 0, None
-    ticker_fix = symbol if "Binance" in source_name else "BTC/USDT"
+    ticker_fix = symbol
     try:
         ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=500)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -306,94 +235,89 @@ def calculate_indicators(df):
     return df.fillna(method='bfill').fillna(method='ffill')
 
 # -----------------------------------------------------------------------------
-# 5. IA ANALISTA (HTML ROBUSTO)
+# 5. IA ANALISTA (NATIVE UI - NO HTML ERRORS)
 # -----------------------------------------------------------------------------
-def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src, signal, prob):
-    # 1. CONTEXTO MULTI-TIMEFRAME
+def render_native_ai_analysis(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src, signal, prob):
+    # LOGICA DE ANALISIS
     t_15m = mtf_trends.get('15m', 'NEUTRO')
     t_1h = mtf_trends.get('1h', 'NEUTRO')
     t_4h = mtf_trends.get('4h', 'NEUTRO')
     
-    if mtf_score == 3: context = "<span style='color:#00FF00'>ALCISTA FUERTE</span> (Alineación Total)"
-    elif mtf_score == -3: context = "<span style='color:#FF4444'>BAJISTA FUERTE</span> (Alineación Total)"
-    elif t_4h == "BULL" and t_15m == "BEAR": context = "<span style='color:#FFFF00'>CORRECCIÓN EN CURSO</span> (Macro Alcista / Micro Bajista)"
-    elif t_4h == "BEAR" and t_15m == "BULL": context = "<span style='color:#FFFF00'>REBOTE TÉCNICO</span> (Macro Bajista / Micro Alcista)"
-    else: context = "MERCADO MIXTO (Conflicto de Temporalidades)"
+    if mtf_score == 3: context_txt = "ALCISTA FUERTE (Alineación Total)"; context_col = "green"
+    elif mtf_score == -3: context_txt = "BAJISTA FUERTE (Alineación Total)"; context_col = "red"
+    elif t_4h == "BULL" and t_15m == "BEAR": context_txt = "CORRECCIÓN (Macro Alcista / Micro Bajista)"; context_col = "orange"
+    elif t_4h == "BEAR" and t_15m == "BULL": context_txt = "REBOTE (Macro Bajista / Micro Alcista)"; context_col = "orange"
+    else: context_txt = "MERCADO MIXTO"; context_col = "grey"
     
-    # 2. DATOS DERIVADOS
-    deriv_txt = f"{fr:.4f}%"
-    fr_color = "#FF4444" if abs(fr) > 0.01 else "#00FF00"
+    deriv_txt = "Saludable"
+    if fr > 0.01: deriv_txt = "Riesgo Long Squeeze"
+    elif fr < -0.01: deriv_txt = "Riesgo Short Squeeze"
     
     if open_interest > 1000000000: oi_fmt = f"${open_interest/1000000000:.2f}B"
     elif open_interest > 1000000: oi_fmt = f"${open_interest/1000000:.2f}M"
     else: oi_fmt = f"${open_interest:,.0f}"
-    
-    # 3. MOMENTO (TSI / MFI / ADX)
+
     mfi = row['MFI']
     adx = row['ADX_14']
     tsi = row['TSI']
     
     gas_status = "LLENO" if mfi > 60 else "RESERVA" if mfi < 40 else "MEDIO"
-    gas_color = "#00FF00" if mfi > 60 else "#FF4444" if mfi < 40 else "#FFF"
     tsi_status = "ALCISTA" if tsi > 0 else "BAJISTA"
     
-    # 4. FLUJO (OBI)
     pressure = "COMPRADORA" if obi > 0.05 else "VENDEDORA" if obi < -0.05 else "NEUTRA"
-    obi_color = "#00FF00" if obi > 0.05 else "#FF4444" if obi < -0.05 else "#aaa"
-    
-    # 5. VEREDICTO FINAL
-    if signal == "LONG":
-        verdict = f"🎯 VEREDICTO: <span style='color:#00FF00'>⬆️ LONG</span> (Prob: {prob:.1f}%)"
-    elif signal == "SHORT":
-        verdict = f"🎯 VEREDICTO: <span style='color:#FF4444'>⬇️ SHORT</span> (Prob: {prob:.1f}%)"
-    else:
-        verdict = f"⏳ VEREDICTO: <span style='color:#888'>ESPERAR CONFIRMACIÓN</span>"
+    obi_col = "green" if obi > 0.05 else "red" if obi < -0.05 else "grey"
 
-    # HTML SIMPLIFICADO (SIN CLASES COMPLEJAS QUE ROMPAN)
-    html = f"""
-    <div class='ai-container'>
-        <span class='ai-header'>🤖 QUIMERA COPILOT <span style='font-size:10px; color:#888;'>(Data: {data_src})</span></span>
+    # RENDERIZADO NATIVO DE STREAMLIT (SIN HTML ROTO)
+    with st.container():
+        st.markdown(f"### 🤖 QUIMERA COPILOT (Source: {data_src})")
         
-        <div class='ai-line'>📡 <b>ESTRUCTURA:</b> {context}</div>
-        <div class='ai-line'>📊 <b>DERIVADOS:</b> Funding: <b style='color:{fr_color}'>{deriv_txt}</b> | OI: <b style='color:#44AAFF'>{oi_fmt}</b></div>
-        <div class='ai-line'>🔥 <b>MOMENTO:</b> Gasolina: <b style='color:{gas_color}'>{gas_status}</b> | TSI: {tsi_status} ({tsi:.2f}) | ADX: {adx:.1f}</div>
-        <div class='ai-line'>⛽ <b>LIBRO:</b> Presión <b style='color:{obi_color}'>{pressure}</b> ({obi*100:.1f}%)</div>
+        c1, c2 = st.columns(2)
+        c1.markdown(f"**📡 ESTRUCTURA:** :{context_col}[{context_txt}]")
+        c2.markdown(f"**📊 DERIVADOS:** Funding: `{fr:.4f}%` ({deriv_txt})")
         
-        <div class='ai-verdict-box'>{verdict}</div>
-    </div>
-    """
-    return html
+        c3, c4 = st.columns(2)
+        c3.markdown(f"**⛽ VOLUMEN:** Libro :{obi_col}[{pressure}] ({obi*100:.1f}%)")
+        c4.markdown(f"**💸 INTERÉS ABIERTO:** `{oi_fmt}`")
+        
+        st.markdown(f"**🔥 MOMENTO:** Gasolina: **{gas_status}** | ADX: `{adx:.1f}` | TSI: `{tsi_status}`")
+        
+        st.divider()
+        
+        if signal == "LONG":
+            st.success(f"🎯 VEREDICTO FINAL: **ENTRADA LONG** (Probabilidad: {prob:.1f}%)")
+        elif signal == "SHORT":
+            st.error(f"🎯 VEREDICTO FINAL: **ENTRADA SHORT** (Probabilidad: {prob:.1f}%)")
+        else:
+            st.warning("⏳ VEREDICTO FINAL: **ESPERAR CONFIRMACIÓN**")
 
 def run_strategy(df, obi, trend_4h, filters):
     row = df.iloc[-1]
-    score, max_score, details = 0, 0, []
+    score, max_score = 0, 0
     
     if filters['use_mtf']:
         max_score += 2
-        if trend_4h == "BULLISH": score += 2; details.append("<span class='badge-bull'>MACRO</span>")
-        elif trend_4h == "BEARISH": score -= 2; details.append("<span class='badge-bear'>MACRO</span>")
-        else: details.append("<span class='badge-neutral'>MACRO</span>")
+        if trend_4h == "BULLISH": score += 2
+        elif trend_4h == "BEARISH": score -= 2
 
     if filters['use_ema']: 
         max_score += 1
-        if row['EMA_20'] > row['EMA_50']: score += 1; details.append("<span class='badge-bull'>EMA</span>")
-        else: score -= 1; details.append("<span class='badge-bear'>EMA</span>")
+        if row['EMA_20'] > row['EMA_50']: score += 1
+        else: score -= 1
 
     if filters['use_vwap']:
         max_score += 1
-        if row['close'] > row['VWAP']: score += 1; details.append("<span class='badge-bull'>VWAP</span>")
-        else: score -= 1; details.append("<span class='badge-bear'>VWAP</span>")
+        if row['close'] > row['VWAP']: score += 1
+        else: score -= 1
         
     if filters['use_obi']:
         max_score += 1
-        if obi > 0.05: score += 1; details.append("<span class='badge-bull'>OBI</span>")
-        elif obi < -0.05: score -= 1; details.append("<span class='badge-bear'>OBI</span>")
-        else: details.append("<span class='badge-neutral'>OBI</span>")
+        if obi > 0.05: score += 1
+        elif obi < -0.05: score -= 1
     
     if filters.get('use_tsi', False): 
         max_score += 1
-        if row['TSI'] > 0: score += 1; details.append("<span class='badge-bull'>TSI</span>")
-        else: score -= 1; details.append("<span class='badge-bear'>TSI</span>")
+        if row['TSI'] > 0: score += 1
+        else: score -= 1
     
     threshold = max_score * 0.4
     signal = "NEUTRO"
@@ -408,9 +332,8 @@ def run_strategy(df, obi, trend_4h, filters):
 
     prob = 50.0
     if max_score > 0: prob = 50 + ((abs(score)/max_score)*45)
-    thermo_score = (score / max_score) * 100 if max_score > 0 else 0
     
-    return signal, row['ATR'], prob, thermo_score, details
+    return signal, row['ATR'], prob
 
 # -----------------------------------------------------------------------------
 # 6. EJECUCIÓN
@@ -424,7 +347,7 @@ def execute_trade(type, entry, sl, tp1, tp2, tp3, size, atr, leverage):
     save_trades(df)
     return new
 
-def manage_open_positions(current_price, current_high, current_low):
+def manage_open_positions(current_price):
     df = load_trades()
     if df.empty: return
     open_idx = df.index[df['status'] == "OPEN"].tolist()
@@ -436,33 +359,19 @@ def manage_open_positions(current_price, current_high, current_low):
             if use_trailing:
                 new_sl = current_price - (row['atr_entry'] * 1.5)
                 if new_sl > row['sl']: df.at[idx, 'sl'] = new_sl
-            if use_breakeven and current_high >= row['tp1'] and row['sl'] < row['entry']: df.at[idx, 'sl'] = row['entry'] * 1.001 
-            if current_high >= row['tp3']: close_reason, pnl = "TP3 (Final) 🚀", (row['tp3'] - row['entry']) * row['size']
-            elif current_low <= row['sl']: close_reason, pnl = "SL 🛑", (row['sl'] - row['entry']) * row['size']
+            if current_price >= row['tp3']: close_reason, pnl = "TP3 🚀", (row['tp3'] - row['entry']) * row['size']
+            elif current_price <= row['sl']: close_reason, pnl = "SL 🛑", (row['sl'] - row['entry']) * row['size']
         else:
             if use_trailing:
                 new_sl = current_price + (row['atr_entry'] * 1.5)
                 if new_sl < row['sl']: df.at[idx, 'sl'] = new_sl
-            if use_breakeven and current_low <= row['tp1'] and row['sl'] > row['entry']: df.at[idx, 'sl'] = row['entry'] * 0.999 
-            if current_low <= row['tp3']: close_reason, pnl = "TP3 (Final) 🚀", (row['entry'] - row['tp3']) * row['size']
-            elif current_high >= row['sl']: close_reason, pnl = "SL 🛑", (row['entry'] - row['sl']) * row['size']
-
-        if not close_reason and use_time_stop:
-            df.at[idx, 'candles_held'] += 1
-            current_pnl_calc = (current_price - row['entry']) * row['size'] if row['type'] == "LONG" else (row['entry'] - current_price) * row['size']
-            if df.at[idx, 'candles_held'] > 12 and current_pnl_calc < 0: close_reason, pnl = "Time Stop ⏳", current_pnl_calc
+            if current_price <= row['tp3']: close_reason, pnl = "TP3 🚀", (row['entry'] - row['tp3']) * row['size']
+            elif current_price >= row['sl']: close_reason, pnl = "SL 🛑", (row['entry'] - row['sl']) * row['size']
 
         if close_reason:
             df.at[idx, 'status'] = "CLOSED"; df.at[idx, 'pnl'] = pnl; df.at[idx, 'reason'] = close_reason
-            send_telegram_msg(f"💰 CIERRE {symbol}: {close_reason}\nPnL: ${pnl:.2f}")
             updated = True
-    if updated or use_time_stop: save_trades(df)
-
-def send_telegram_msg(msg):
-    t, c = st.secrets.get("TELEGRAM_TOKEN", ""), st.secrets.get("TELEGRAM_CHAT_ID", "")
-    if t and c:
-        try: requests.get(f"https://api.telegram.org/bot{t}/sendMessage", params={"chat_id": c, "text": msg})
-        except: pass
+    if updated: save_trades(df)
 
 def render_analytics(df_trades):
     if df_trades.empty:
@@ -474,13 +383,8 @@ def render_analytics(df_trades):
         return
     closed['cumulative_pnl'] = closed['pnl'].cumsum()
     closed['equity'] = INITIAL_CAPITAL + closed['cumulative_pnl']
-    start = pd.DataFrame([{'time': 'Inicio', 'equity': INITIAL_CAPITAL}])
-    curve = pd.concat([start, closed[['time', 'equity']]])
-    total_profit = closed['pnl'].sum()
-    fig = px.area(curve, x='time', y='equity', title="Curva de Capital (Equity Curve)")
-    fig.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=30,b=0))
-    color = '#00FF00' if total_profit >= 0 else '#FF4444'
-    fig.update_traces(line_color=color, fillcolor=color.replace("FF", "22") if total_profit>=0 else color.replace("44", "11"))
+    fig = px.area(closed, x='time', y='equity', title="Curva de Capital (Equity Curve)")
+    fig.update_layout(template="plotly_dark", height=300)
     st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------------------------
@@ -491,222 +395,59 @@ df, obi, trend_4h = get_mtf_data(symbol, tf)
 if df is not None:
     df = calculate_indicators(df)
     filters = {'use_mtf': use_mtf, 'use_ema': use_ema, 'use_vwap': use_vwap, 'use_ichi': use_ichi, 'use_regime': use_regime, 'use_rsi': use_rsi, 'use_obi': use_obi, 'use_tsi': use_tsi}
-    signal, atr, prob, thermo_score, details_list = run_strategy(df, obi, trend_4h, filters)
-    current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
-    mfi_val, adx_val = df['MFI'].iloc[-1], df['ADX_14'].iloc[-1]
+    signal, atr, prob = run_strategy(df, obi, trend_4h, filters)
+    current_price = df['close'].iloc[-1]
     
-    # DATOS FIX (Coinglass / Bybit / dYdX)
-    fng_val, fng_label = get_fear_and_greed()
-    news = get_crypto_news()
+    # DATOS FIX (BYBIT)
     fr, open_interest, data_src = get_deriv_data(symbol)
     mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
     
-    # IA (HTML Correcto + TSI)
-    ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest, data_src, signal, prob)
-    
-    setup = None
-    calc_dir = signal 
-    setup_type = "CONFIRMED" if signal != "NEUTRO" else "POTENTIAL"
-    
-    if signal == "NEUTRO":
-        if trend_4h == "BULLISH": calc_dir = "LONG"
-        elif trend_4h == "BEARISH": calc_dir = "SHORT"
-        else: calc_dir = None
-
-    qty, leverage = 0, 1.0
-    current_balance = get_current_balance()
-    
-    if calc_dir:
-        sl_dist = atr * 1.5
-        risk = sl_dist
-        risk_amount = current_balance * (risk_per_trade / 100)
-        qty = risk_amount / risk if risk > 0 else 0
-        
-        notional_value = qty * current_price
-        leverage = max(1.0, notional_value / current_balance)
-
-        if calc_dir == "LONG":
-            sl, tp1, tp2, tp3 = current_price-sl_dist, current_price+risk, current_price+(risk*2), current_price+(risk*3.5)
-            emoji = "⬆️ LONG"
-        else:
-            sl, tp1, tp2, tp3 = current_price+sl_dist, current_price-risk, current_price-(risk*2), current_price-(risk*3.5)
-            emoji = "⬇️ SHORT"
-        setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'dir': emoji, 'status': setup_type, 'qty': qty, 'lev': leverage}
-
-    if signal != "NEUTRO" and signal != st.session_state.last_alert and setup:
-        msg = f"""🦁 *QUIMERA SIGNAL*
-📉 {symbol} | {setup['dir']}
-📊 Prob: {prob:.1f}% | Lev: {setup['lev']:.1f}x
-🔵 Entry: ${setup['entry']:.2f}
-🛑 SL: ${setup['sl']:.2f}
-🎯 TP1: ${setup['tp1']:.2f}
-"""
-        send_telegram_msg(msg)
-        st.session_state.last_alert = signal
-    elif signal == "NEUTRO": st.session_state.last_alert = "NEUTRO"
-    
-    manage_open_positions(current_price, cur_high, cur_low)
-    
-    tab1, tab2 = st.tabs(["📊 LIVE COMMAND", "🧪 PAPER TRADING"])
+    # UI NATIVA
+    tab1, tab2 = st.tabs(["📊 COMANDO CENTRAL", "🧪 PAPER TRADING"])
     
     with tab1:
-        col_news, col_tech, col_fng = st.columns([1.5, 1, 1])
-        with col_news:
-            st.markdown("### 📰 MARKET FLASH")
-            if news:
-                news_html = "<div class='news-box'>"
-                for n in news:
-                    t_struct = n.get('published', time.gmtime())
-                    t_str = f"{t_struct.tm_hour:02}:{t_struct.tm_min:02}"
-                    news_html += f"<div class='news-item'><span class='news-time'>{t_str}</span> <a href='{n['link']}' target='_blank' class='news-link'>{n['title']}</a></div>"
-                news_html += "</div>"
-                st.markdown(news_html, unsafe_allow_html=True)
-            else: st.info("Sin noticias recientes.")
+        render_native_ai_analysis(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest, data_src, signal, prob)
         
-        with col_tech:
-            fig_thermo = go.Figure(go.Indicator(
-                mode = "gauge+number", value = thermo_score, domain = {'x': [0, 1], 'y': [0, 1]},
-                title = {'text': "<span style='font-size:16px'>Bot Sentiment</span>"},
-                gauge = {'axis': {'range': [-100, 100]}, 'bar': {'color': "white"}, 'bgcolor': "#111",
-                    'steps': [{'range': [-100, -40], 'color': "#FF4444"}, {'range': [-40, 40], 'color': "#555"}, {'range': [40, 100], 'color': "#00FF00"}]}
-            ))
-            fig_thermo.update_layout(height=200, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
-            st.plotly_chart(fig_thermo, use_container_width=True)
-            st.markdown(f"<div style='text-align:center'>{' '.join(details_list)}</div>", unsafe_allow_html=True)
-
-        with col_fng:
-            fig_fng = go.Figure(go.Indicator(
-                mode = "gauge+number", value = fng_val, domain = {'x': [0, 1], 'y': [0, 1]},
-                title = {'text': "<span style='font-size:16px'>Fear & Greed</span>"},
-                gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "white"}, 'bgcolor': "#111",
-                    'steps': [{'range': [0, 40], 'color': "#FF4444"}, {'range': [40, 60], 'color': "#FFFF00"}, {'range': [60, 100], 'color': "#00FF00"}]}
-            ))
-            fig_fng.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
-            st.plotly_chart(fig_fng, use_container_width=True)
-
-        # HTML IA
-        st.markdown(ai_html, unsafe_allow_html=True)
-        
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         c1.metric("Precio", f"${current_price:,.2f}")
+        c2.metric("Funding", f"{fr:.4f}%")
+        c3.metric("MTF", f"{mtf_trends['15m']} | {mtf_trends['1h']} | {mtf_trends['4h']}")
         
-        # WIDGETS
-        c2.metric("Funding Rate", f"{fr:.4f}%", delta_color="inverse")
-        
-        # Formateo Open Interest
-        if open_interest > 1000000000: oi_show = f"${open_interest/1000000000:.2f}B"
-        elif open_interest > 1000000: oi_show = f"${open_interest/1000000:.2f}M"
-        else: oi_show = f"${open_interest:,.0f}"
-        c3.metric("Open Interest", oi_show)
-        
-        # MTF
-        with c4:
-            cols = st.columns(3)
-            colors = {"BULL": "🟢", "BEAR": "🔴", "NEUTRO": "⚪"}
-            cols[0].markdown(f"<div style='text-align:center; font-size:10px'>15m<br><span style='font-size:14px'>{colors[mtf_trends['15m']]}</span></div>", unsafe_allow_html=True)
-            cols[1].markdown(f"<div style='text-align:center; font-size:10px'>1h<br><span style='font-size:14px'>{colors[mtf_trends['1h']]}</span></div>", unsafe_allow_html=True)
-            cols[2].markdown(f"<div style='text-align:center; font-size:10px'>4h<br><span style='font-size:14px'>{colors[mtf_trends['4h']]}</span></div>", unsafe_allow_html=True)
-
-        st.markdown("### 📊 RASTREADOR DE RENDIMIENTO (Paper Trading)")
-        df_stats = load_trades()
-        total_pnl_val = 0.0
-        win_rate = 0.0
-        open_count = 0
-        total_closed = 0
-        
-        if not df_stats.empty:
-            closed_s = df_stats[df_stats['status'] == 'CLOSED']
-            open_s = df_stats[df_stats['status'] == 'OPEN']
-            total_closed = len(closed_s)
-            open_count = len(open_s)
-            if total_closed > 0:
-                total_pnl_val = closed_s['pnl'].sum()
-                wins = len(closed_s[closed_s['pnl'] > 0])
-                win_rate = (wins / total_closed) * 100
-        
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        sc1.metric("PnL Total", f"${total_pnl_val:.2f}", delta_color="normal")
-        sc2.metric("Win Rate", f"{win_rate:.1f}%")
-        sc3.metric("Trades Cerrados", total_closed)
-        sc4.metric("Trades Abiertos", open_count)
-        
-        st.divider()
-
-        if setup:
-            prob_str = f"{prob:.1f}%"
-            prob_color = "#00FF00" if prob >= 80 else "#FFFF00" if prob >= 60 else "#FF4444"
-            if setup['status'] == "CONFIRMED":
-                header_cls = "header-confirmed-long" if calc_dir == "LONG" else "header-confirmed-short"
-                header_txt = f"🔥 CONFIRMADO: {setup['dir']}"
-                btn_label = f"🚀 EJECUTAR {calc_dir} ({setup['qty']:.4f})"
-            else:
-                header_cls = "header-potential"
-                header_txt = f"⚠️ POTENCIAL: {setup['dir']}"
-                btn_label = f"⚠️ FORZAR ENTRADA"
-
-            html_card = f"""
-<div class="trade-setup">
-    <div class="{header_cls}">{header_txt}</div>
-    <div style='margin-top: 5px; margin-bottom: 10px; text-align: left;'>
-        <div style='display:flex; justify-content:space-between; color:#ccc; font-size:12px; margin-bottom:2px;'>
-            <span>Probabilidad de Éxito:</span><span style='color:{prob_color}; font-weight:bold;'>{prob_str}</span>
-        </div>
-        <div style='width: 100%; background-color: #333; border-radius: 4px; height: 6px;'>
-            <div style='width: {prob}%; background-color: {prob_color}; height: 6px; border-radius: 4px; box-shadow: 0 0 5px {prob_color};'></div>
-        </div>
-    </div>
-    <p style="color:#888; font-size:14px;">Posición: <span style="color:white; font-weight:bold">{setup['qty']:.4f} {symbol.split('/')[0]}</span> (Riesgo ${risk_amount:.1f}) | <span style="color:#44AAFF; font-weight:bold">LEV: {setup['lev']:.1f}x</span></p>
-    <div style="display: flex; justify-content: space-around; margin-top: 10px;">
-        <div><span class="label-mini">ENTRADA</span><br><span class="entry-blue">${setup['entry']:.2f}</span></div>
-        <div><span class="label-mini">STOP LOSS</span><br><span class="sl-red">${setup['sl']:.2f}</span></div>
-        <div><span class="label-mini">TP 1</span><br><span class="tp-green">${setup['tp1']:.2f}</span></div>
-        <div><span class="label-mini">TP 2</span><br><span class="tp-green">${setup['tp2']:.2f}</span></div>
-        <div><span class="label-mini">TP 3</span><br><span class="tp-green">${setup['tp3']:.2f}</span></div>
-    </div>
-</div>
-"""
-            st.markdown(html_card, unsafe_allow_html=True)
-            if st.button(btn_label):
-                execute_trade(calc_dir, current_price, setup['sl'], setup['tp1'], setup['tp2'], setup['tp3'], setup['qty'], atr, setup['lev'])
-                st.success(f"Orden {calc_dir} lanzada.")
-        else: st.info("Esperando estructura de mercado clara...")
-
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-        # CORRECCION: Un solo 'name' en el grafico
-        fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name=f'{source_name} Data'), row=1, col=1)
+        fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
         if use_vwap: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
-        last_pivot, last_s1, last_r1 = df.iloc[-1]['PIVOT'], df.iloc[-1]['S1'], df.iloc[-1]['R1']
-        fig.add_hline(y=last_pivot, line_dash="dash", line_color="gray", annotation_text="Pivote", row=1, col=1)
-        fig.add_hline(y=last_s1, line_dash="dot", line_color="green", annotation_text="S1", row=1, col=1)
-        fig.add_hline(y=last_r1, line_dash="dot", line_color="red", annotation_text="R1", row=1, col=1)
-        if setup:
-            fig.add_hline(y=setup['tp1'], line_dash="dot", line_color="green", row=1, col=1)
-            fig.add_hline(y=setup['sl'], line_dash="dot", line_color="red", row=1, col=1)
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['RSI'], line=dict(color='purple'), name='RSI'), row=2, col=1)
         fig.add_hline(y=70, row=2, col=1); fig.add_hline(y=30, row=2, col=1)
-        
-        fig.update_layout(title=f"Chart Source: {source_name}", template="plotly_dark", height=500, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
+        fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
+        
+        setup = None
+        if signal != "NEUTRO":
+            sl_dist = atr * 1.5
+            risk_amount = current_balance * (risk_per_trade / 100)
+            qty = risk_amount / sl_dist if sl_dist > 0 else 0
+            leverage = max(1.0, (qty * current_price) / current_balance)
+            
+            if signal == "LONG":
+                sl, tp1, tp2, tp3 = current_price-sl_dist, current_price+sl_dist, current_price+(sl_dist*2), current_price+(sl_dist*3.5)
+                emoji = "⬆️ LONG"
+            else:
+                sl, tp1, tp2, tp3 = current_price+sl_dist, current_price-sl_dist, current_price-(sl_dist*2), current_price-(sl_dist*3.5)
+                emoji = "⬇️ SHORT"
+            
+            setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'dir': emoji, 'qty': qty, 'lev': leverage}
+            
+            st.info(f"🔥 SEÑAL {setup['dir']} DETECTADA | Prob: {prob:.1f}% | Lev: {setup['lev']:.1f}x")
+            if st.button("EJECUTAR OPERACIÓN"):
+                execute_trade(signal, current_price, setup['sl'], setup['tp1'], setup['tp2'], setup['tp3'], setup['qty'], atr, setup['lev'])
+                st.success("Orden Ejecutada")
 
     with tab2:
         df_trades = load_trades()
-        st.subheader("📈 Rendimiento Detallado")
         render_analytics(df_trades)
-        st.divider()
-        if not df_trades.empty:
-            open_trades = df_trades[df_trades['status'] == "OPEN"].copy()
-            closed_trades = df_trades[df_trades['status'] == "CLOSED"]
-            st.subheader("🟢 Posiciones Abiertas")
-            if not open_trades.empty:
-                open_trades['Floating PnL'] = np.where(open_trades['type'] == 'LONG', (current_price - open_trades['entry']) * open_trades['size'], (open_trades['entry'] - current_price) * open_trades['size'])
-                def color_floating(val): return f'color: {"#00FF00" if val > 0 else "#FF4444"}; font-weight: bold;'
-                cols_show = ['time', 'symbol', 'type', 'leverage', 'entry', 'size', 'sl', 'tp3', 'Floating PnL']
-                st.dataframe(open_trades[cols_show].style.applymap(color_floating, subset=['Floating PnL']).format({'leverage': '{:.1f}x'}), use_container_width=True)
-            else: st.info("No hay operaciones abiertas.")
-            st.subheader("📜 Historial Cerrado")
-            def color_pnl(val): return f'color: {"#228B22" if val > 0 else "#B22222" if val < 0 else "white"}'
-            if not closed_trades.empty: st.dataframe(closed_trades.style.applymap(color_pnl, subset=['pnl']).format({'leverage': '{:.1f}x'}), use_container_width=True)
-        else: st.info("Historial vacío.")
+        st.dataframe(df_trades, use_container_width=True)
+        
+    manage_open_positions(current_price)
 
 else: st.warning("Cargando datos...")
 
