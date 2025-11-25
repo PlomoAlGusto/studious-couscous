@@ -5,7 +5,6 @@ import pandas_ta as ta
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-from prophet import Prophet
 import requests
 from datetime import datetime, timedelta, timezone
 import time
@@ -22,15 +21,19 @@ st.markdown("""
 <style>
     .metric-card {background-color: #262730; padding: 10px; border-radius: 8px; border: 1px solid #444;}
     .big-signal {font-size: 24px; font-weight: bold; text-align: center; padding: 15px; border-radius: 10px; margin-bottom: 20px;}
-    .bullish {background-color: rgba(0, 255, 0, 0.1); border: 2px solid #00FF00; color: #00FF00;}
-    .bearish {background-color: rgba(255, 0, 0, 0.1); border: 2px solid #FF0000; color: #FF0000;}
-    .neutral {background-color: rgba(255, 255, 0, 0.1); border: 1px dashed #FFFF00; color: #FFFF00;}
     
+    /* CAJA PRINCIPAL DEL TRADE */
     .trade-setup {
-        background-color: #151515; padding: 20px; border-radius: 15px; border: 1px solid #444;
-        margin-top: 10px; margin-bottom: 20px; text-align: center;
+        background-color: #151515; 
+        padding: 20px; 
+        border-radius: 15px; 
+        border: 1px solid #444;
+        margin-top: 10px; 
+        margin-bottom: 20px; 
+        text-align: center;
         box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
+    
     .tp-green { color: #00FF00; font-weight: bold; font-size: 18px; }
     .sl-red { color: #FF4444; font-weight: bold; font-size: 18px; }
     .entry-blue { color: #44AAFF; font-weight: bold; font-size: 18px; }
@@ -76,7 +79,6 @@ def get_market_sessions():
     now = datetime.now(timezone.utc)
     hour = now.hour
     
-    # Horarios aproximados UTC
     sessions = {
         "🇬🇧 LONDRES": (8, 16),
         "🇺🇸 NEW YORK": (13, 21),
@@ -89,7 +91,7 @@ def get_market_sessions():
         is_open = False
         if start < end:
             is_open = start <= hour < end
-        else: # Cruza medianoche (Sydney)
+        else:
             is_open = hour >= start or hour < end
             
         status_icon = "🟢 ABIERTO" if is_open else "🔴 CERRADO"
@@ -103,10 +105,9 @@ def get_market_sessions():
         """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.title("🦁 QUIMERA v13.0")
+    st.title("🦁 QUIMERA v13.3")
     st.caption("Chronos Edition ⏳")
     
-    # WIDGET DE RELOJES
     get_market_sessions()
     st.divider()
     
@@ -333,9 +334,14 @@ def execute_trade(type, entry, sl, tp1, tp2, tp3, size, atr):
     save_trades(df)
     return new
 
-def manage_open_positions(current_price):
+def manage_open_positions(current_price, current_high, current_low):
+    """
+    Gestiona operaciones abiertas revisando High/Low para detectar mechas y cerrar correctamente.
+    """
     df = load_trades()
     if df.empty: return
+    
+    # Filtramos solo las abiertas
     open_idx = df.index[df['status'] == "OPEN"].tolist()
     updated = False
     
@@ -344,29 +350,57 @@ def manage_open_positions(current_price):
         close_reason = ""
         pnl = 0
         
-        if use_time_stop:
-            df.at[idx, 'candles_held'] += 1
-            if df.at[idx, 'candles_held'] > 12 and (current_price - row['entry']) * (1 if row['type']=="LONG" else -1) <= 0:
-                close_reason = "Time Stop ⏳"
-        
-        if not close_reason:
-            if row['type'] == "LONG":
-                if use_trailing:
-                    new_sl = current_price - (row['atr_entry'] * 1.5)
-                    if new_sl > row['sl']: df.at[idx, 'sl'] = new_sl
-                if use_breakeven and current_price > (row['entry'] * 1.015) and row['sl'] < row['entry']: df.at[idx, 'sl'] = row['entry']
-                if current_price >= row['tp3']: close_reason="TP3 🚀"; pnl=(row['tp3']-row['entry'])*row['size']
-                elif current_price <= row['sl']: close_reason="SL 🛑"; pnl=(row['sl']-row['entry'])*row['size']
-            else:
-                if use_trailing:
-                    new_sl = current_price + (row['atr_entry'] * 1.5)
-                    if new_sl < row['sl']: df.at[idx, 'sl'] = new_sl
-                if use_breakeven and current_price < (row['entry'] * 0.985) and row['sl'] > row['entry']: df.at[idx, 'sl'] = row['entry']
-                if current_price <= row['tp3']: close_reason="TP3 🚀"; pnl=(row['entry']-row['tp3'])*row['size']
-                elif current_price >= row['sl']: close_reason="SL 🛑"; pnl=(row['entry']-row['sl'])*row['size']
+        # --- LÓGICA LONG ---
+        if row['type'] == "LONG":
+            # 1. Trailing Stop
+            if use_trailing:
+                new_sl = current_price - (row['atr_entry'] * 1.5)
+                if new_sl > row['sl']: df.at[idx, 'sl'] = new_sl
+            
+            # 2. Breakeven al tocar TP1 (Asegurar entrada)
+            if use_breakeven and current_high >= row['tp1'] and row['sl'] < row['entry']:
+                df.at[idx, 'sl'] = row['entry'] * 1.001 
 
+            # 3. Revisión de Salidas (Usamos High/Low para detectar mechas)
+            if current_high >= row['tp3']: 
+                close_reason="TP3 (Final) 🚀"
+                pnl = (row['tp3'] - row['entry']) * row['size']
+            elif current_low <= row['sl']: 
+                close_reason="SL 🛑"
+                pnl = (row['sl'] - row['entry']) * row['size']
+        
+        # --- LÓGICA SHORT ---
+        else:
+            # 1. Trailing Stop
+            if use_trailing:
+                new_sl = current_price + (row['atr_entry'] * 1.5)
+                if new_sl < row['sl']: df.at[idx, 'sl'] = new_sl
+            
+            # 2. Breakeven al tocar TP1 (Asegurar entrada)
+            if use_breakeven and current_low <= row['tp1'] and row['sl'] > row['entry']:
+                df.at[idx, 'sl'] = row['entry'] * 0.999 
+
+            # 3. Revisión de Salidas (Usamos High/Low para detectar mechas)
+            if current_low <= row['tp3']: 
+                close_reason="TP3 (Final) 🚀"
+                pnl = (row['entry'] - row['tp3']) * row['size']
+            elif current_high >= row['sl']: 
+                close_reason="SL 🛑"
+                pnl = (row['entry'] - row['sl']) * row['size']
+
+        # 4. Time Stop (Cierre por tiempo si no hay progreso)
+        if not close_reason and use_time_stop:
+            df.at[idx, 'candles_held'] += 1
+            current_pnl_calc = (current_price - row['entry']) * row['size'] if row['type'] == "LONG" else (row['entry'] - current_price) * row['size']
+            if df.at[idx, 'candles_held'] > 12 and current_pnl_calc < 0:
+                close_reason = "Time Stop ⏳"
+                pnl = current_pnl_calc
+
+        # EJECUTAR CIERRE SI CORRESPONDE
         if close_reason:
-            df.at[idx, 'status'] = "CLOSED"; df.at[idx, 'pnl'] = pnl; df.at[idx, 'reason'] = close_reason
+            df.at[idx, 'status'] = "CLOSED"
+            df.at[idx, 'pnl'] = pnl
+            df.at[idx, 'reason'] = close_reason
             send_telegram_msg(f"💰 CIERRE {symbol}: {close_reason}\nPnL: ${pnl:.2f}")
             updated = True
 
@@ -414,6 +448,8 @@ if df is not None:
     
     signal, atr, prob, thermo_score = run_strategy(df, obi, trend_4h, filters)
     current_price = df['close'].iloc[-1]
+    cur_high = df['high'].iloc[-1]
+    cur_low = df['low'].iloc[-1]
     mfi_val = df['MFI'].iloc[-1]
     
     fng_val, fng_label = get_fear_and_greed()
@@ -465,7 +501,10 @@ Prob: {prob:.1f}%
         st.session_state.last_alert = signal
     elif signal == "NEUTRO": st.session_state.last_alert = "NEUTRO"
     
-    manage_open_positions(current_price)
+    # -----------------------------------------------------
+    # LÓGICA CORREGIDA: Pasar High/Low para mechas
+    # -----------------------------------------------------
+    manage_open_positions(current_price, cur_high, cur_low)
     
     tab1, tab2 = st.tabs(["📊 LIVE COMMAND", "🧪 PAPER TRADING"])
     
@@ -485,7 +524,6 @@ Prob: {prob:.1f}%
         
         with col_thermo:
             st.markdown("### 🎛️ TERMÓMETRO TÉCNICO")
-            # Gauge del Score Total (-100 a 100)
             fig_thermo = go.Figure(go.Indicator(
                 mode = "gauge+number",
                 value = thermo_score,
@@ -516,27 +554,12 @@ Prob: {prob:.1f}%
         c4.metric("GASOLINA (MFI)", f"{mfi_val:.0f}", gas_state)
 
         if setup:
-            # --- MODIFICACIÓN: Cálculo visual de probabilidad ---
+            # --- CORRECCIÓN HTML DE LA TARJETA ---
             prob_str = f"{prob:.1f}%"
-            
-            # Definir color de la barra de probabilidad según fuerza
-            if prob >= 80: prob_color = "#00FF00" # Verde fuerte
-            elif prob >= 60: prob_color = "#FFFF00" # Amarillo
-            else: prob_color = "#FF4444" # Rojo
-            
-            # Barra de progreso HTML para insertar debajo del título
-            progress_bar_html = f"""
-            <div style='margin-top: 5px; margin-bottom: 10px; text-align: left;'>
-                <div style='display:flex; justify-content:space-between; color:#ccc; font-size:12px; margin-bottom:2px;'>
-                    <span>Probabilidad de Éxito:</span>
-                    <span style='color:{prob_color}; font-weight:bold;'>{prob_str}</span>
-                </div>
-                <div style='width: 100%; background-color: #333; border-radius: 4px; height: 6px;'>
-                    <div style='width: {prob}%; background-color: {prob_color}; height: 6px; border-radius: 4px; box-shadow: 0 0 5px {prob_color};'></div>
-                </div>
-            </div>
-            """
-            
+            if prob >= 80: prob_color = "#00FF00"
+            elif prob >= 60: prob_color = "#FFFF00"
+            else: prob_color = "#FF4444"
+
             if setup['status'] == "CONFIRMED":
                 header_cls = "header-confirmed-long" if calc_dir == "LONG" else "header-confirmed-short"
                 header_txt = f"🔥 CONFIRMADO: {setup['dir']}"
@@ -546,20 +569,30 @@ Prob: {prob:.1f}%
                 header_txt = f"⚠️ POTENCIAL: {setup['dir']}"
                 btn_label = f"⚠️ FORZAR ENTRADA"
 
-            st.markdown(f"""
-            <div class="trade-setup">
-                <div class="{header_cls}">{header_txt}</div>
-                {progress_bar_html}
-                <p style="color:#888; font-size:14px;">Posición Sugerida: <span style="color:white; font-weight:bold">{setup['qty']:.4f} {symbol.split('/')[0]}</span> (Riesgo ${risk_amount:.1f})</p>
-                <div style="display: flex; justify-content: space-around; margin-top: 10px;">
-                    <div><span class="label-mini">ENTRADA</span><br><span class="entry-blue">${setup['entry']:.2f}</span></div>
-                    <div><span class="label-mini">STOP LOSS</span><br><span class="sl-red">${setup['sl']:.2f}</span></div>
-                    <div><span class="label-mini">TP 1</span><br><span class="tp-green">${setup['tp1']:.2f}</span></div>
-                    <div><span class="label-mini">TP 2</span><br><span class="tp-green">${setup['tp2']:.2f}</span></div>
-                    <div><span class="label-mini">TP 3</span><br><span class="tp-green">${setup['tp3']:.2f}</span></div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            # Construimos el HTML sin indentación para evitar el error de "código raw"
+            html_card = f"""
+<div class="trade-setup">
+    <div class="{header_cls}">{header_txt}</div>
+    <div style='margin-top: 5px; margin-bottom: 10px; text-align: left;'>
+        <div style='display:flex; justify-content:space-between; color:#ccc; font-size:12px; margin-bottom:2px;'>
+            <span>Probabilidad de Éxito:</span>
+            <span style='color:{prob_color}; font-weight:bold;'>{prob_str}</span>
+        </div>
+        <div style='width: 100%; background-color: #333; border-radius: 4px; height: 6px;'>
+            <div style='width: {prob}%; background-color: {prob_color}; height: 6px; border-radius: 4px; box-shadow: 0 0 5px {prob_color};'></div>
+        </div>
+    </div>
+    <p style="color:#888; font-size:14px;">Posición Sugerida: <span style="color:white; font-weight:bold">{setup['qty']:.4f} {symbol.split('/')[0]}</span> (Riesgo ${risk_amount:.1f})</p>
+    <div style="display: flex; justify-content: space-around; margin-top: 10px;">
+        <div><span class="label-mini">ENTRADA</span><br><span class="entry-blue">${setup['entry']:.2f}</span></div>
+        <div><span class="label-mini">STOP LOSS</span><br><span class="sl-red">${setup['sl']:.2f}</span></div>
+        <div><span class="label-mini">TP 1</span><br><span class="tp-green">${setup['tp1']:.2f}</span></div>
+        <div><span class="label-mini">TP 2</span><br><span class="tp-green">${setup['tp2']:.2f}</span></div>
+        <div><span class="label-mini">TP 3</span><br><span class="tp-green">${setup['tp3']:.2f}</span></div>
+    </div>
+</div>
+"""
+            st.markdown(html_card, unsafe_allow_html=True)
             
             if st.button(btn_label):
                 execute_trade(calc_dir, current_price, setup['sl'], setup['tp1'], setup['tp2'], setup['tp3'], setup['qty'], atr)
@@ -593,10 +626,28 @@ Prob: {prob:.1f}%
         render_analytics(df_trades)
         st.divider()
         if not df_trades.empty:
-            open_trades = df_trades[df_trades['status'] == "OPEN"]
+            open_trades = df_trades[df_trades['status'] == "OPEN"].copy()
             closed_trades = df_trades[df_trades['status'] == "CLOSED"]
+            
             st.subheader("🟢 Posiciones Abiertas")
-            st.dataframe(open_trades, use_container_width=True)
+            if not open_trades.empty:
+                # Calculamos PnL Flotante para ver ganancias en tiempo real
+                open_trades['Floating PnL'] = np.where(
+                    open_trades['type'] == 'LONG',
+                    (current_price - open_trades['entry']) * open_trades['size'],
+                    (open_trades['entry'] - current_price) * open_trades['size']
+                )
+                
+                def color_floating(val):
+                    color = '#00FF00' if val > 0 else '#FF4444'
+                    return f'color: {color}; font-weight: bold;'
+                
+                # Mostramos columnas clave + el PnL flotante
+                cols_to_show = ['time', 'symbol', 'type', 'entry', 'size', 'sl', 'tp3', 'Floating PnL']
+                st.dataframe(open_trades[cols_to_show].style.applymap(color_floating, subset=['Floating PnL']), use_container_width=True)
+            else:
+                st.info("No hay operaciones abiertas.")
+
             st.subheader("📜 Historial Cerrado")
             def color_pnl(val):
                 color = '#228B22' if val > 0 else '#B22222' if val < 0 else 'white'
