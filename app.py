@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v17.1 CVD + FR Alert", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="Quimera Pro v17.2 Final", layout="wide", page_icon="🧠")
 st.markdown("""
 <style>
     .metric-card {background-color: #262730; padding: 10px; border-radius: 8px; border: 1px solid #444;}
@@ -120,7 +120,7 @@ def get_market_sessions():
         st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{status_icon}</span></div>", unsafe_allow_html=True)
 
 # =============================================================================
-# DERIVADOS: PROMEDIO PONDERADO (SIN BINANCE FUTURES)
+# DERIVADOS: PROMEDIO PONDERADO DE 4 FUENTES
 # =============================================================================
 @st.cache_data(ttl=60)
 def get_deriv_data(symbol):
@@ -204,7 +204,7 @@ def get_mtf_trends_analysis(symbol):
     return trends, score
 
 # =============================================================================
-# BACKTESTING CORREGIDO
+# BACKTESTING CORREGIDO (SIN ERRORES)
 # =============================================================================
 def run_backtest(df, filters, atr_threshold=None):
     if df is None or len(df) < 100: 
@@ -251,8 +251,10 @@ def run_backtest(df, filters, atr_threshold=None):
             max_score += 1
             if row['TSI'] > 0: score += 1
 
-        # === CORRECCIÓN CLAVE ===
+        # === CORRECCIÓN CLAVE: asegurar que ADX_14 es un escalar ===
         adx_val = row['ADX_14']
+        if isinstance(adx_val, pd.Series):
+            adx_val = adx_val.iloc[0] if len(adx_val) > 0 else 0
         if filters['use_regime'] and pd.notna(adx_val) and adx_val < 20:
             signals.append(0)
         else:
@@ -320,7 +322,7 @@ def get_liquidity_and_cvd(exchange, symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🧠 QUIMERA v17.1")
+    st.title("🧠 QUIMERA v17.2")
     st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
     get_market_sessions()
     st.divider()
@@ -372,13 +374,13 @@ def get_crypto_news():
 
 @st.cache_data(ttl=15)
 def get_mtf_data(symbol, tf_lower):
-    if not exchange: return None, 0, None, 0, False
+    if not exchange: return None, 0, None, False, 0
     ticker_fix = symbol if "Binance" in source_name else "BTC/USDT"
     try:
         ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=600)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    except: return None, 0, None, 0, False
+    except: return None, 0, None, False, 0
 
     trend_4h = "NEUTRO"
     try:
@@ -420,10 +422,9 @@ def calculate_indicators(df):
     return df.fillna(method='bfill').fillna(method='ffill')
 
 # -----------------------------------------------------------------------------
-# 5. IA ANALISTA CON ALERTAS DE FUNDING Y CVD
+# 5. IA ANALISTA CON ALERTAS DE FUNDING EXTREMO Y CVD
 # -----------------------------------------------------------------------------
 def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, cvd, fr, open_interest, data_src, regime, bayes_prob, is_liquid):
-    # Contexto MTF
     t_15m = mtf_trends.get('15m', 'NEUTRO')
     t_1h = mtf_trends.get('1h', 'NEUTRO')
     t_4h = mtf_trends.get('4h', 'NEUTRO')
@@ -474,7 +475,7 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, cvd, fr, open
 
     html = f"""
     <div class='ai-box'>
-        <span class='ai-title'>🤖 QUIMERA COPILOT v17.1 (ML + CVD + FR Alert):</span>
+        <span class='ai-title'>🤖 QUIMERA COPILOT v17.2 (ML + CVD + FR Alert):</span>
         <div>📡 <b>ESTRUCTURA:</b> {context}</div>
         <div>🧠 <b>RÉGIMEN ML:</b> <b>{regime}</b></div>
         <div>📊 <b>DERIVADOS:</b> {deriv_txt}. {oi_txt} {funding_alert}</div>
@@ -644,18 +645,14 @@ if df is not None:
             else:
                 st.sidebar.error("Insuficientes datos para backtest")
 
-    # Función MTF (¡YA ESTÁ!)
     mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
-
-    # Estrategia con CVD
     signal, atr, prob, thermo_score, details_list = run_strategy(df, cvd, trend_4h, filters, fr, is_liquid, atr_vol_threshold)
-
     current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
     fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
     ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, cvd, fr, open_interest, data_src, regime, bayes_prob, is_liquid)
 
-    # ... resto de tu lógica de señales, gestión de trades, UI, etc. (igual que antes)
+    # ... resto de tu lógica de señales, gestión de trades, UI, etc.
     setup = None
     calc_dir = signal 
     setup_type = "CONFIRMED" if signal != "NEUTRO" else "POTENTIAL"
