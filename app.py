@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v16.0 Ironclad", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v16.1 Fixed Deriv", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -133,27 +133,51 @@ def get_market_sessions():
 
 @st.cache_data(ttl=60)
 def get_deriv_data(symbol):
-    # Normaliza símbolo: e.g., "BTC/USDT" -> "BTC/USDT:USDT" para perpetuos lineales
+    # Normaliza para APIs: 'BTC/USDT' -> 'BTCUSDT'
+    api_symbol = symbol.replace('/', '')  # 'BTCUSDT'
     base = symbol.split('/')[0]
-    quote = symbol.split('/')[1]
-    symbol_perp = f"{base}/{quote}:{quote}"  # 'BTC/USDT:USDT'
 
     COINGLASS_API_KEY = st.secrets.get("COINGLASS_API_KEY")
 
-    # 1. Prioridad: CCXT Binance Futures (Gratuito, Público)
+    # 1. Prioridad: Binance Public API (Requests directos, sin CCXT)
     try:
-        exchange_f = ccxt.binanceusdm({'enableRateLimit': True})
-        exchange_f.load_markets()  # Valida mercados
-        fr_data = exchange_f.fetch_funding_rate(symbol_perp)
-        fr = fr_data['fundingRate'] * 100 if fr_data['fundingRate'] else None
-        oi_data = exchange_f.fetch_open_interest(symbol_perp)
-        oi_val = oi_data['openInterestValue'] if 'openInterestValue' in oi_data else None
+        # Funding Rate
+        url_fr = f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={api_symbol}&limit=1"
+        r_fr = requests.get(url_fr, timeout=5).json()
+        fr = float(r_fr[0]['fundingRate']) * 100 if r_fr else None
+        
+        # Open Interest
+        url_oi = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={api_symbol}"
+        r_oi = requests.get(url_oi, timeout=5).json()
+        oi_val = float(r_oi.get('openInterest', 0)) if r_oi else None
+        
         if fr is not None and oi_val is not None and oi_val > 0:
-            return fr, oi_val, "Binance Futures (CCXT)"
+            print(f"Binance Success: FR={fr}, OI={oi_val}")  # Debug console
+            return fr, oi_val, "Binance Public API"
     except Exception as e:
-        print(f"Error Binance CCXT: {e}")
+        print(f"Error Binance Requests: {e}")
 
-    # 2. Fallback: CoinGlass (Si key válida)
+    # 2. Fallback: Bybit Public API (Requests directos)
+    try:
+        # Funding Rate (último)
+        url_fr_bybit = f"https://api.bybit.com/v5/market/funding/history?category=linear&symbol={api_symbol}&limit=1"
+        r_fr_bybit = requests.get(url_fr_bybit, timeout=5).json()
+        if r_fr_bybit['retCode'] == 0 and r_fr_bybit['result']['list']:
+            fr = float(r_fr_bybit['result']['list'][0]['fundingRate']) * 100
+        
+        # Open Interest
+        url_oi_bybit = f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={api_symbol}"
+        r_oi_bybit = requests.get(url_oi_bybit, timeout=5).json()
+        if r_oi_bybit['retCode'] == 0:
+            oi_val = float(r_oi_bybit['result']['list'][0]['openInterest'])
+        
+        if fr is not None and oi_val is not None and oi_val > 0:
+            print(f"Bybit Success: FR={fr}, OI={oi_val}")
+            return fr, oi_val, "Bybit Public API"
+    except Exception as e:
+        print(f"Error Bybit Requests: {e}")
+
+    # 3. Fallback: CoinGlass (Si key válida)
     if COINGLASS_API_KEY:
         try:
             headers = {"coinglassSecret": COINGLASS_API_KEY}
@@ -165,31 +189,19 @@ def get_deriv_data(symbol):
             avg_fr = 0.0
             total_oi = 0.0
             if r_fr.get('success') and r_fr.get('data'):
-                # Promedio FR de exchanges principales
                 fr_list = [ex['uMarginList'][0]['rate'] * 100 for ex in r_fr['data'] if ex['uMarginList']]
                 avg_fr = np.mean(fr_list) if fr_list else None
             if r_oi.get('success') and r_oi.get('data'):
                 total_oi = sum(ex.get('openInterestAmount', 0) * ex.get('price', 1) for ex in r_oi['data'])
             
             if avg_fr is not None and total_oi > 0:
+                print(f"CoinGlass Success: FR={avg_fr}, OI={total_oi}")
                 return avg_fr, total_oi, "CoinGlass"
         except Exception as e:
             print(f"Error CoinGlass: {e}")
 
-    # 3. Fallback Final: Bybit via CCXT (Alternativa gratuita)
-    try:
-        exchange_b = ccxt.bybit({'enableRateLimit': True})
-        exchange_b.load_markets()
-        fr_data = exchange_b.fetch_funding_rate(symbol_perp)
-        fr = fr_data['fundingRate'] * 100
-        oi_data = exchange_b.fetch_open_interest(symbol_perp)
-        oi_val = oi_data['openInterestValue']
-        if fr is not None and oi_val is not None:
-            return fr, oi_val, "Bybit (CCXT)"
-    except Exception as e:
-        print(f"Error Bybit: {e}")
-
-    return None, None, "OFFLINE"  # Maneja en UI como "N/A"
+    print("All Deriv Fallbacks Failed - OFFLINE")  # Debug
+    return None, None, "OFFLINE"
 
 @st.cache_data(ttl=30)
 def get_mtf_trends_analysis(symbol):
@@ -212,7 +224,7 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v16.0")
+    st.title("🦁 QUIMERA v16.1")
     st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
     get_market_sessions()
     st.divider()
@@ -240,6 +252,15 @@ with st.sidebar:
         use_trailing = st.checkbox("Trailing Stop", True)
         use_breakeven = st.checkbox("Breakeven (+1.5%)", True)
         use_time_stop = st.checkbox("Time Stop (12 Velas)", True)
+    
+    # NUEVO: Debug para Deriv Data
+    with st.expander("🔍 DEBUG DERIVADOS", expanded=False):
+        if 'fr_debug' in locals():
+            st.write(f"**FR Raw:** {fr_debug:.4f}%")
+            st.write(f"**OI Raw:** ${oi_debug:,.0f}")
+            st.write(f"**Source:** {src_debug}")
+        else:
+            st.info("Ejecuta la app para ver datos.")
         
     auto_refresh = st.checkbox("🔄 AUTO-SCAN (60s)", False)
     if st.button("🔥 RESETEAR CUENTA"): reset_account()
@@ -520,16 +541,20 @@ if df is not None:
     df = calculate_indicators(df)
     filters = {'use_mtf': use_mtf, 'use_ema': use_ema, 'use_vwap': use_vwap, 'use_ichi': use_ichi, 'use_regime': use_regime, 'use_rsi': use_rsi, 'use_obi': use_obi, 'use_tsi': use_tsi}
     fr, open_interest, data_src = get_deriv_data(symbol)
+    
+    # DEBUG GLOBAL (para sidebar)
+    fr_debug, oi_debug, src_debug = fr, open_interest, data_src
+    
     signal, atr, prob, thermo_score, details_list = run_strategy(df, obi, trend_4h, filters, fr)
     current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
     mfi_val, adx_val = df['MFI'].iloc[-1], df['ADX_14'].iloc[-1]
     
-    # DATOS FIX (Coinglass / Bybit / dYdX)
+    # DATOS FIX
     fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
     mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
     
-    # IA (HTML Correcto + TSI)
+    # IA
     ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest, data_src)
     
     setup = None
