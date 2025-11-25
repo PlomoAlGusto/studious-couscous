@@ -7,3 +7,4 @@ ccxt
 requests
 feedparser
 scikit-learn 
+nltk==3.8.1
