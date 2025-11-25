@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v15.2 Unstoppable", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v15.4 Secure", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -42,7 +42,6 @@ st.markdown("""
     .header-confirmed-short { color: #FF4444; font-size: 20px; font-weight: 900; border-bottom: 1px solid #333; padding-bottom: 10px; }
     .header-potential { color: #FFFF00; font-size: 18px; font-weight: bold; border-bottom: 1px dashed #555; padding-bottom: 10px; }
     
-    /* CAJA IA MEJORADA (HTML) */
     .ai-box {
         background-color: #111; 
         border-left: 4px solid #44AAFF; 
@@ -71,11 +70,6 @@ st.markdown("""
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
     .badge-neutral { background-color: #333; color: #aaa; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #555; margin-right: 4px; }
-    
-    .stats-bar {
-        background-color: #1E1E1E; border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 20px;
-        display: flex; justify-content: space-around; align-items: center;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -90,14 +84,16 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
-# --- GESTIÓN DE CLAVES SEGURA ---
+# --- GESTIÓN DE CLAVES SEGURA (GITHUB SAFE) ---
 try:
+    # Intenta leer de secrets.toml (Local) o Secrets (Cloud)
     COINGLASS_API_KEY = st.secrets["COINGLASS_KEY"]
 except:
-    COINGLASS_API_KEY = ""
+    # Si no existe, se queda vacío y usará Bybit por defecto
+    COINGLASS_API_KEY = None
 
 # -----------------------------------------------------------------------------
-# 2. MOTOR DE DATOS: TRIPLE FALLBACK (COINGLASS -> DYDX -> BYBIT)
+# 2. MOTOR DE DATOS (MULTI-FUENTE)
 # -----------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=COLUMNS_DB)
@@ -134,15 +130,15 @@ def get_market_sessions():
 @st.cache_data(ttl=120)
 def get_deriv_data(symbol):
     """
-    Obtiene Funding Rate y Open Interest con Triple Redundancia.
+    Obtiene Funding Rate y Open Interest.
+    Prioridad: CoinGlass (Si hay Key) -> Bybit (Pública) -> dYdX (Fallback)
     """
     base_coin = symbol.split('/')[0]
     
-    # 1. COINGLASS (API V3 Endpoint Public)
+    # 1. COINGLASS (Solo si existe la clave en secrets)
     if COINGLASS_API_KEY:
         try:
             headers = {"coinglassSecret": COINGLASS_API_KEY}
-            # OI Aggregate
             url_oi = f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base_coin}"
             r_oi = requests.get(url_oi, headers=headers, timeout=2).json()
             
@@ -151,26 +147,33 @@ def get_deriv_data(symbol):
             
             if r_oi.get('success'):
                 for ex in r_oi['data']:
-                    # Sum OI from all exchanges
                     total_oi += ex.get('openInterestAmount', 0) * ex.get('price', 0)
             
-            # Funding Rate
             url_fr = f"https://open-api.coinglass.com/public/v2/funding?symbol={base_coin}"
             r_fr = requests.get(url_fr, headers=headers, timeout=2).json()
             
             if r_fr.get('success'):
-                # Get Binance rate
                 for ex in r_fr['data']:
                     if ex['exchangeName'] == 'Binance':
                         if 'uMarginList' in ex and len(ex['uMarginList']) > 0:
                             avg_fr = ex['uMarginList'][0]['rate']
                         break
             
-            if total_oi > 0:
-                return avg_fr, total_oi
+            if total_oi > 0: return avg_fr, total_oi, "CoinGlass"
         except: pass
 
-    # 2. DYDX (Descentralizado - Sin bloqueo)
+    # 2. BYBIT V5 (Fuente Pública y Robusta)
+    try:
+        url = f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_coin}USDT"
+        r = requests.get(url, timeout=2).json()
+        if r['retCode'] == 0:
+            info = r['result']['list'][0]
+            fr = float(info['fundingRate']) * 100
+            oi_val = float(info['openInterestValue'])
+            return fr, oi_val, "Bybit"
+    except: pass
+
+    # 3. DYDX (Fallback Descentralizado)
     try:
         dydx_symbol = f"{base_coin}-USD"
         url = f"https://api.dydx.exchange/v3/markets/{dydx_symbol}"
@@ -178,20 +181,10 @@ def get_deriv_data(symbol):
         market = r['market']
         fr = float(market['nextFundingRate']) * 100
         oi = float(market['openInterest'])
-        return fr, oi
+        return fr, oi, "dYdX"
     except: pass
 
-    # 3. BYBIT V5 (API Pública Robusta)
-    try:
-        url = f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_coin}USDT"
-        r = requests.get(url, timeout=2).json()
-        info = r['result']['list'][0]
-        fr = float(info['fundingRate']) * 100
-        oi = float(info['openInterestValue'])
-        return fr, oi
-    except: pass
-
-    return 0.0, 0.0
+    return 0.0, 0.0, "Error"
 
 @st.cache_data(ttl=30)
 def get_mtf_trends_analysis(symbol):
@@ -223,8 +216,8 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v15.2")
-    st.caption("Unstoppable Data 🛠️")
+    st.title("🦁 QUIMERA v15.4")
+    st.caption("Secure GitHub Edition 🔒")
     get_market_sessions()
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT")
@@ -333,9 +326,9 @@ def calculate_indicators(df):
     return df.fillna(method='bfill').fillna(method='ffill')
 
 # -----------------------------------------------------------------------------
-# 5. IA ANALISTA
+# 5. IA ANALISTA (HTML FORMAT)
 # -----------------------------------------------------------------------------
-def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest):
+def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src):
     # 1. CONTEXTO MULTI-TIMEFRAME
     t_15m = mtf_trends.get('15m', 'NEUTRO')
     t_1h = mtf_trends.get('1h', 'NEUTRO')
@@ -366,7 +359,7 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
 
     html = f"""
     <div class='ai-box'>
-        <span class='ai-title'>🤖 QUIMERA COPILOT:</span>
+        <span class='ai-title'>🤖 QUIMERA COPILOT (Data Source: {data_src}):</span>
         <div style='margin-top:5px;'>📡 <b>ESTRUCTURA:</b> {context}</div>
         <div>📊 <b>DERIVADOS:</b> {deriv_txt}. {oi_txt}</div>
         <div>⛽ <b>VOLUMEN:</b> {obi_txt}</div>
@@ -503,14 +496,14 @@ if df is not None:
     current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
     mfi_val, adx_val = df['MFI'].iloc[-1], df['ADX_14'].iloc[-1]
     
-    # DATOS FIX (Coinglass Integrated)
+    # DATOS FIX (Coinglass / Bybit / dYdX)
     fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
-    fr, open_interest = get_deriv_data(symbol)
+    fr, open_interest, data_src = get_deriv_data(symbol)
     mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
     
     # IA (HTML Correcto)
-    ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest)
+    ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest, data_src)
     
     setup = None
     calc_dir = signal 
