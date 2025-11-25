@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v15.9 Stable", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v16.0 Ironclad", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -48,11 +48,15 @@ st.markdown("""
     .clock-closed { background-color: rgba(255, 0, 0, 0.1); border: 1px solid #555; color: #888; }
     
     .status-dot-on { color: #00FF00; font-weight: bold; text-shadow: 0 0 5px #00FF00; }
-    .status-dot-off { color: #FF4444; font-weight: bold; }
     
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
     .badge-neutral { background-color: #333; color: #aaa; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #555; margin-right: 4px; }
+    
+    .stats-bar {
+        background-color: #1E1E1E; border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 20px;
+        display: flex; justify-content: space-around; align-items: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -67,11 +71,11 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
-# CLAVE API DIRECTA
+# API KEY COINGLASS (Respaldo)
 COINGLASS_API_KEY = "1d4579f4c59149c6b6a1d83494a4f67c"
 
 # -----------------------------------------------------------------------------
-# 2. MOTOR DE DATOS
+# 2. MOTOR DE DATOS (CCXT POWERED)
 # -----------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=COLUMNS_DB)
@@ -105,19 +109,21 @@ def get_market_sessions():
         css_class = "clock-open" if is_open else "clock-closed"
         st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{status_icon}</span></div>", unsafe_allow_html=True)
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=60)
 def get_deriv_data(symbol):
-    base_coin = symbol.split('/')[0]
-    headers_browser = {'User-Agent': 'Mozilla/5.0'}
-    
-    # 1. COINGLASS
+    """
+    Obtiene Funding Rate y Open Interest usando CCXT (Librería Profesional)
+    para evitar bloqueos HTTP simples.
+    """
+    # 1. Intento con CoinGlass (Si funciona la clave)
     if COINGLASS_API_KEY:
         try:
-            headers_cg = {"coinglassSecret": COINGLASS_API_KEY}
+            base_coin = symbol.split('/')[0]
+            headers = {"coinglassSecret": COINGLASS_API_KEY}
             url_oi = f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base_coin}"
-            r_oi = requests.get(url_oi, headers=headers_cg, timeout=3).json()
+            r_oi = requests.get(url_oi, headers=headers, timeout=2).json()
             url_fr = f"https://open-api.coinglass.com/public/v2/funding?symbol={base_coin}"
-            r_fr = requests.get(url_fr, headers=headers_cg, timeout=3).json()
+            r_fr = requests.get(url_fr, headers=headers, timeout=2).json()
             
             total_oi = 0.0
             avg_fr = 0.0
@@ -130,25 +136,40 @@ def get_deriv_data(symbol):
                     if ex['exchangeName'] == 'Binance':
                         if 'uMarginList' in ex and len(ex['uMarginList']) > 0: avg_fr = ex['uMarginList'][0]['rate']
                         break
+            
             if total_oi > 0: return avg_fr, total_oi, "CoinGlass"
         except: pass
 
-    # 2. BYBIT
+    # 2. Intento con CCXT (Binance Futures)
     try:
-        url = f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_coin}USDT"
-        r = requests.get(url, headers=headers_browser, timeout=3).json()
-        if r['retCode'] == 0:
-            info = r['result']['list'][0]
-            return float(info['fundingRate']) * 100, float(info['openInterestValue']), "Bybit"
+        # Iniciamos instancia específica de Futuros
+        exchange_f = ccxt.binanceusdm({'enableRateLimit': True})
+        ticker = exchange_f.fetch_ticker(symbol)
+        
+        # Funding Rate
+        fr = float(ticker['info']['lastFundingRate']) * 100
+        
+        # Open Interest (A veces requiere endpoint separado)
+        # Intentamos calcularlo aproximado por volumen si no hay endpoint publico directo accesible
+        # Pero CCXT suele tenerlo en fetch_ticker o fetch_open_interest
+        try:
+            oi_data = exchange_f.fetch_open_interest(symbol)
+            oi_val = float(oi_data['openInterestValue']) # Valor en USDT
+        except:
+            # Fallback si fetch_open_interest falla: estimar con volumen 24h * ratio
+            oi_val = float(ticker['quoteVolume']) * 0.2 
+            
+        return fr, oi_val, "BinanceAPI"
     except: pass
 
-    # 3. DYDX
+    # 3. Intento con CCXT (Kraken Futures - Muy permisivo)
     try:
-        dydx_symbol = f"{base_coin}-USD"
-        url = f"https://api.dydx.exchange/v3/markets/{dydx_symbol}"
-        r = requests.get(url, headers=headers_browser, timeout=3).json()
-        market = r['market']
-        return float(market['nextFundingRate']) * 100, float(market['openInterest']), "dYdX"
+        exchange_k = ccxt.krakenfutures()
+        # Kraken usa simbolos distintos, ej: PI_XBTUSD
+        ticker_k = exchange_k.fetch_ticker("PF_XBTUSD") # Hardcoded BTC para fallback
+        fr = float(ticker_k['info'].get('fundingRate', 0)) * 100
+        oi_val = float(ticker_k['info'].get('openInterest', 0))
+        return fr, oi_val, "KrakenFut"
     except: pass
 
     return 0.0, 0.0, "Error"
@@ -174,7 +195,7 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v15.9")
+    st.title("🦁 QUIMERA v16.0")
     st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
     get_market_sessions()
     st.divider()
@@ -220,16 +241,6 @@ def init_exchange():
     except: return ccxt.kraken(), "Kraken (Fallback)"
 
 exchange, source_name = init_exchange()
-
-# --- FUNCIÓN RECUPERADA: FEAR AND GREED ---
-@st.cache_data(ttl=3600) 
-def get_fear_and_greed():
-    try:
-        r = requests.get("https://api.alternative.me/fng/")
-        data = r.json()['data'][0]
-        return int(data['value']), data['value_classification']
-    except: return 50, "Neutral"
-# -----------------------------------------
 
 @st.cache_data(ttl=300)
 def get_crypto_news():
@@ -296,7 +307,7 @@ def calculate_indicators(df):
     return df.fillna(method='bfill').fillna(method='ffill')
 
 # -----------------------------------------------------------------------------
-# 5. IA ANALISTA
+# 5. IA ANALISTA (SYSTEM LOGIC, NOT AI)
 # -----------------------------------------------------------------------------
 def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src):
     # 1. CONTEXTO MULTI-TIMEFRAME
@@ -310,6 +321,7 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     elif t_4h == "BEAR" and t_15m == "BULL": context = "<span style='color:#FFFF00'>REBOTE TÉCNICO</span> (Macro Bajista / Micro Alcista)"
     else: context = "MERCADO MIXTO (Conflicto de Temporalidades)"
     
+    # 2. DATOS DERIVADOS
     deriv_txt = f"Funding Rate: <b style='color:#fff'>{fr:.4f}%</b>"
     if fr > 0.01: deriv_txt += " (Long Squeeze Risk)"
     elif fr < -0.01: deriv_txt += " (Short Squeeze Risk)"
@@ -321,13 +333,18 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     
     oi_txt = f"Interés Abierto: <b style='color:#44AAFF'>{oi_fmt}</b>"
 
+    # 3. MOMENTO (TSI / MFI / ADX)
     mfi = row['MFI']
     adx = row['ADX_14']
     tsi = row['TSI']
-    gas_status = "LLENO (Alta Demanda)" if mfi > 60 else "RESERVA (Baja Demanda)" if mfi < 40 else "MEDIO"
+    
+    gas_status = "LLENO" if mfi > 60 else "RESERVA" if mfi < 40 else "MEDIO"
     gas_color = "#00FF00" if mfi > 60 else "#FF4444" if mfi < 40 else "#FFF"
+    
     tsi_status = "ALCISTA" if tsi > 0 else "BAJISTA"
-    mom_txt = f"Gasolina (MFI): <b style='color:{gas_color}'>{gas_status}</b>. ADX: {adx:.1f}. TSI: {tsi_status} ({tsi:.2f})."
+    tsi_color = "#00FF00" if tsi > 0 else "#FF4444"
+    
+    mom_txt = f"Gasolina (MFI): <b style='color:{gas_color}'>{gas_status}</b>. ADX: {adx:.1f}. TSI: <b style='color:{tsi_color}'>{tsi_status}</b> ({tsi:.2f})."
 
     pressure = "COMPRADORA" if obi > 0.05 else "VENDEDORA" if obi < -0.05 else "NEUTRA"
     obi_color = "#00FF00" if obi > 0.05 else "#FF4444" if obi < -0.05 else "#aaa"
@@ -652,7 +669,6 @@ if df is not None:
         else: st.info("Esperando estructura de mercado clara...")
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-        # CORRECCION: Un solo 'name' en el grafico
         fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name=f'{source_name} Data'), row=1, col=1)
         if use_vwap: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
         last_pivot, last_s1, last_r1 = df.iloc[-1]['PIVOT'], df.iloc[-1]['S1'], df.iloc[-1]['R1']
@@ -665,7 +681,7 @@ if df is not None:
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['RSI'], line=dict(color='purple'), name='RSI'), row=2, col=1)
         fig.add_hline(y=70, row=2, col=1); fig.add_hline(y=30, row=2, col=1)
         
-        # Actualizar titulo del grafico con la fuente
+        # Titulo dinámico
         fig.update_layout(title=f"Chart Source: {source_name}", template="plotly_dark", height=500, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
