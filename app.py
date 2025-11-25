@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v17.0 ML Enhanced", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="Quimera Pro v17.1 CVD + FR Alert", layout="wide", page_icon="🧠")
 st.markdown("""
 <style>
     .metric-card {background-color: #262730; padding: 10px; border-radius: 8px; border: 1px solid #444;}
@@ -120,7 +120,7 @@ def get_market_sessions():
         st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{status_icon}</span></div>", unsafe_allow_html=True)
 
 # =============================================================================
-# DERIVADOS: PROMEDIO PONDERADO DE 4 FUENTES (SIN BINANCE FUTURES)
+# DERIVADOS: PROMEDIO PONDERADO (SIN BINANCE FUTURES)
 # =============================================================================
 @st.cache_data(ttl=60)
 def get_deriv_data(symbol):
@@ -179,7 +179,7 @@ def get_deriv_data(symbol):
     return fr, oi, src
 
 # =============================================================================
-# FUNCIÓN FALTANTE: RESTAURADA
+# FUNCIÓN FALTANTE: RESTAURADA Y FUNCIONAL
 # =============================================================================
 @st.cache_data(ttl=30)
 def get_mtf_trends_analysis(symbol):
@@ -204,7 +204,7 @@ def get_mtf_trends_analysis(symbol):
     return trends, score
 
 # =============================================================================
-# BACKTESTING SIMPLE
+# BACKTESTING CORREGIDO
 # =============================================================================
 def run_backtest(df, filters, atr_threshold=None):
     if df is None or len(df) < 100: 
@@ -251,7 +251,9 @@ def run_backtest(df, filters, atr_threshold=None):
             max_score += 1
             if row['TSI'] > 0: score += 1
 
-        if filters['use_regime'] and row['ADX_14'] < 20:
+        # === CORRECCIÓN CLAVE ===
+        adx_val = row['ADX_14']
+        if filters['use_regime'] and pd.notna(adx_val) and adx_val < 20:
             signals.append(0)
         else:
             threshold = max_score * 0.4 if max_score > 0 else 0
@@ -318,7 +320,7 @@ def get_liquidity_and_cvd(exchange, symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🧠 QUIMERA v17.0")
+    st.title("🧠 QUIMERA v17.1")
     st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
     get_market_sessions()
     st.divider()
@@ -370,13 +372,13 @@ def get_crypto_news():
 
 @st.cache_data(ttl=15)
 def get_mtf_data(symbol, tf_lower):
-    if not exchange: return None, 0, None, False, 0
+    if not exchange: return None, 0, None, 0, False
     ticker_fix = symbol if "Binance" in source_name else "BTC/USDT"
     try:
         ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=600)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    except: return None, 0, None, False, 0
+    except: return None, 0, None, 0, False
 
     trend_4h = "NEUTRO"
     try:
@@ -418,9 +420,10 @@ def calculate_indicators(df):
     return df.fillna(method='bfill').fillna(method='ffill')
 
 # -----------------------------------------------------------------------------
-# 5. IA ANALISTA
+# 5. IA ANALISTA CON ALERTAS DE FUNDING Y CVD
 # -----------------------------------------------------------------------------
 def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, cvd, fr, open_interest, data_src, regime, bayes_prob, is_liquid):
+    # Contexto MTF
     t_15m = mtf_trends.get('15m', 'NEUTRO')
     t_1h = mtf_trends.get('1h', 'NEUTRO')
     t_4h = mtf_trends.get('4h', 'NEUTRO')
@@ -430,23 +433,29 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, cvd, fr, open
     elif t_4h == "BEAR" and t_15m == "BULL": context = "<span style='color:#FFFF00'>REBOTE TÉCNICO</span> (Macro Bajista / Micro Alcista)"
     else: context = "MERCADO MIXTO (Conflicto de Temporalidades)"
 
+    # --- ALERTAS DE FUNDING EXTREMO ---
+    funding_alert = ""
+    if fr is not None:
+        if fr > 0.03:
+            funding_alert = " ⚠️ <span style='color:#FF4444'>ALERTA: Long Squeeze EXTREMO (Evitar LONG)</span>"
+        elif fr < -0.03:
+            funding_alert = " ⚠️ <span style='color:#00FF00'>ALERTA: Short Squeeze EXTREMO (Evitar SHORT)</span>"
+        elif fr > 0.015:
+            funding_alert = " ⚠️ Long Squeeze en desarrollo"
+        elif fr < -0.015:
+            funding_alert = " ⚠️ Short Squeeze en desarrollo"
+
+    # Derivados
     if fr is None or open_interest is None:
         deriv_txt = "<span style='color:#FFFF00'>Fuentes Derivadas OFFLINE</span>"
         oi_txt = ""
     else:
         deriv_txt = f"Funding Rate: <b style='color:#fff'>{fr:.4f}%</b>"
-        squeeze_risk = ""
-        if fr > 0.02: squeeze_risk = " (HIGH Long Squeeze)"
-        elif fr < -0.02: squeeze_risk = " (HIGH Short Squeeze)"
-        elif fr > 0.01: squeeze_risk = " (Long Squeeze Risk)"
-        elif fr < -0.01: squeeze_risk = " (Short Squeeze Risk)"
-        else: squeeze_risk = " (Saludable)"
-        deriv_txt += squeeze_risk
-        if open_interest > 1e9: oi_fmt = f"${open_interest/1e9:.2f}B"
-        elif open_interest > 1e6: oi_fmt = f"${open_interest/1e6:.2f}M"
-        else: oi_fmt = f"${open_interest:,.0f}"
+        if abs(fr) < 0.005: deriv_txt += " (Saludable)"
+        oi_fmt = f"${open_interest/1e9:.2f}B" if open_interest > 1e9 else f"${open_interest/1e6:.2f}M" if open_interest > 1e6 else f"${open_interest:,.0f}"
         oi_txt = f"Interés Abierto: <b style='color:#44AAFF'>{oi_fmt}</b>"
 
+    # Momentum
     mfi = row['MFI']
     adx = row['ADX_14']
     tsi = row['TSI']
@@ -456,16 +465,19 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, cvd, fr, open
     tsi_color = "#00FF00" if tsi > 0 else "#FF4444"
     mom_txt = f"Gasolina (MFI): <b style='color:{gas_color}'>{gas_status}</b>. ADX: {adx:.1f}. TSI: <b style='color:{tsi_color}'>{tsi_status}</b> ({tsi:.2f})."
 
+    # CVD
     cvd_txt = "🟢 Flujo Comprador" if cvd > 0 else "🔴 Flujo Vendedor" if cvd < 0 else "⚖️ Neutral"
     cvd_color = "#00FF00" if cvd > 0 else "#FF4444" if cvd < 0 else "#aaa"
+
+    # Liquidez
     liquidity_txt = "✅ Mercado Líquido" if is_liquid else "⚠️ Ilíquido (Evitar)"
 
     html = f"""
     <div class='ai-box'>
-        <span class='ai-title'>🤖 QUIMERA COPILOT v17.0 (ML + Backtest):</span>
+        <span class='ai-title'>🤖 QUIMERA COPILOT v17.1 (ML + CVD + FR Alert):</span>
         <div>📡 <b>ESTRUCTURA:</b> {context}</div>
         <div>🧠 <b>RÉGIMEN ML:</b> <b>{regime}</b></div>
-        <div>📊 <b>DERIVADOS:</b> {deriv_txt}. {oi_txt}</div>
+        <div>📊 <b>DERIVADOS:</b> {deriv_txt}. {oi_txt} {funding_alert}</div>
         <div>🔥 <b>MOMENTO:</b> {mom_txt}</div>
         <div>💧 <b>CVD:</b> <b style='color:{cvd_color}'>{cvd_txt}</b> ({cvd:,.0f})</div>
         <div>💧 <b>LIQUIDEZ:</b> {liquidity_txt}</div>
@@ -496,9 +508,9 @@ def run_strategy(df, cvd, trend_4h, filters, fr, is_liquid, atr_vol_threshold):
     if filters['use_obi']:
         max_score += 1
         obi = np.sign(cvd)
-        if obi > 0: score += 1; details.append("<span class='badge-bull'>OBI</span>")
-        elif obi < 0: score -= 1; details.append("<span class='badge-bear'>OBI</span>")
-        else: details.append("<span class='badge-neutral'>OBI</span>")
+        if obi > 0: score += 1; details.append("<span class='badge-bull'>CVD</span>")
+        elif obi < 0: score -= 1; details.append("<span class='badge-bear'>CVD</span>")
+        else: details.append("<span class='badge-neutral'>CVD</span>")
     if filters.get('use_tsi', False): 
         max_score += 1
         if row['TSI'] > 0: score += 1; details.append("<span class='badge-bull'>TSI</span>")
@@ -578,7 +590,7 @@ def render_analytics(df_trades):
     if closed.empty:
         st.info("Aún no has cerrado ninguna operación.")
         return
-    closed['cumulative_pnl'] = closed['pnl'].cumsum()
+    closed['cumulative_pnl'] = closed['pnl'].sum()
     closed['equity'] = INITIAL_CAPITAL + closed['cumulative_pnl']
     start = pd.DataFrame([{'time': 'Inicio', 'equity': INITIAL_CAPITAL}])
     curve = pd.concat([start, closed[['time', 'equity']]])
@@ -632,14 +644,18 @@ if df is not None:
             else:
                 st.sidebar.error("Insuficientes datos para backtest")
 
+    # Función MTF (¡YA ESTÁ!)
     mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
+
+    # Estrategia con CVD
     signal, atr, prob, thermo_score, details_list = run_strategy(df, cvd, trend_4h, filters, fr, is_liquid, atr_vol_threshold)
+
     current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
     fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
     ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, cvd, fr, open_interest, data_src, regime, bayes_prob, is_liquid)
 
-    # ... resto de tu lógica de señales, gestión de trades, UI, etc.
+    # ... resto de tu lógica de señales, gestión de trades, UI, etc. (igual que antes)
     setup = None
     calc_dir = signal 
     setup_type = "CONFIRMED" if signal != "NEUTRO" else "POTENTIAL"
