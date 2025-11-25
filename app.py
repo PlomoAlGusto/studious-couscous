@@ -15,11 +15,13 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v14.3 History+", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v14.5 Analyst", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
     .metric-card {background-color: #262730; padding: 10px; border-radius: 8px; border: 1px solid #444;}
+    .big-signal {font-size: 24px; font-weight: bold; text-align: center; padding: 15px; border-radius: 10px; margin-bottom: 20px;}
+    
     .trade-setup {
         background-color: #151515; 
         padding: 20px; 
@@ -30,6 +32,7 @@ st.markdown("""
         text-align: center;
         box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
+    
     .tp-green { color: #00FF00; font-weight: bold; font-size: 18px; }
     .sl-red { color: #FF4444; font-weight: bold; font-size: 18px; }
     .entry-blue { color: #44AAFF; font-weight: bold; font-size: 18px; }
@@ -66,6 +69,11 @@ st.markdown("""
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
     .badge-neutral { background-color: #333; color: #aaa; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #555; margin-right: 4px; }
+    
+    .stats-bar {
+        background-color: #1E1E1E; border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 20px;
+        display: flex; justify-content: space-around; align-items: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -81,7 +89,7 @@ if not os.path.exists(CSV_FILE):
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
 # -----------------------------------------------------------------------------
-# 2. FUNCIONES AUXILIARES
+# 2. FUNCIONES AUXILIARES Y DATOS AVANZADOS
 # -----------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=COLUMNS_DB)
@@ -116,30 +124,59 @@ def get_market_sessions():
         st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{status_icon}</span></div>", unsafe_allow_html=True)
 
 @st.cache_data(ttl=60)
-def get_funding_rate(symbol):
-    """Obtiene Funding Rate (Intenta Binance, si falla devuelve 0)"""
-    # Intento 1: API Binance Futuros (Falla si IP es de USA)
+def get_deriv_data(symbol):
+    """Obtiene Funding Rate y Open Interest de Binance Futures (API Pública)"""
     try:
         clean_symbol = symbol.replace("/", "")
-        url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={clean_symbol}"
-        r = requests.get(url, timeout=2).json()
-        fr = float(r['lastFundingRate']) * 100
-        return fr
+        
+        # Funding Rate
+        fr_url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={clean_symbol}"
+        fr_r = requests.get(fr_url, timeout=1).json()
+        fr = float(fr_r['lastFundingRate']) * 100
+        
+        # Open Interest (USDT Value)
+        oi_url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={clean_symbol}"
+        oi_r = requests.get(oi_url, timeout=1).json()
+        oi = float(oi_r['openInterest']) * float(fr_r['markPrice']) # Approx value
+        
+        return fr, oi
     except:
-        # Intento 2: Coingecko (Fallback simple, aproximado)
+        return 0.0, 0.0
+
+@st.cache_data(ttl=30)
+def get_mtf_trends_analysis(symbol):
+    """Analiza la tendencia en 15m, 1h y 4h para la IA"""
+    ex = ccxt.binance()
+    ticker_fix = symbol.replace("/", "USDT") if "/" not in symbol else symbol
+    trends = {}
+    
+    timeframes = ['15m', '1h', '4h']
+    score = 0
+    
+    for tf in timeframes:
         try:
-            # Si Binance falla, devolvemos 0.01% por defecto (estándar) 
-            # para no romper la UI con "0.0"
-            return 0.01
+            ohlcv = ex.fetch_ohlcv(ticker_fix, tf, limit=50)
+            df = pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
+            ema_fast = ta.ema(df['c'], length=20).iloc[-1]
+            ema_slow = ta.ema(df['c'], length=50).iloc[-1]
+            
+            if ema_fast > ema_slow: 
+                trends[tf] = "ALCISTA"
+                score += 1
+            else: 
+                trends[tf] = "BAJISTA"
+                score -= 1
         except:
-            return 0.0
+            trends[tf] = "NEUTRO"
+            
+    return trends, score
 
 # -----------------------------------------------------------------------------
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v14.3")
-    st.caption("Deep History Edition 📜")
+    st.title("🦁 QUIMERA v14.5")
+    st.caption("Analyst Edition 🧠")
     get_market_sessions()
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT")
@@ -151,8 +188,10 @@ with st.sidebar:
         use_vwap = st.checkbox("Filtro VWAP (Institucional)", True)
         use_ichi = st.checkbox("Filtro Nube Ichimoku", False)
         use_regime = st.checkbox("Filtro Anti-Rango (ADX)", True)
-        use_rsi = st.checkbox("Filtro RSI (Sobrecompra/Venta)", False)
-        use_obi = st.checkbox("Order Book Imbalance (OBI)", True)
+    
+    with st.expander("🌊 MOMENTO Y VOLUMEN"):
+        use_rsi = st.checkbox("RSI & Stoch", True)
+        use_obi = st.checkbox("Order Book Imbalance", True)
         
     with st.expander("💰 GESTIÓN DE RIESGO"):
         current_balance = get_current_balance()
@@ -168,7 +207,7 @@ with st.sidebar:
     if st.button("🔥 RESETEAR CUENTA"): reset_account()
 
 # -----------------------------------------------------------------------------
-# 4. CAPA DE DATOS & INDICADORES
+# 4. CAPA DE DATOS
 # -----------------------------------------------------------------------------
 def init_exchange():
     try:
@@ -200,15 +239,14 @@ def get_mtf_data(symbol, tf_lower):
     if not exchange: return None, 0, None
     ticker_fix = symbol if "Binance" in source_name else "BTC/USDT"
     try:
-        # --- MEJORA: LÍMITE AUMENTADO A 1000 PARA MÁS HISTORIA ---
-        ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=1000)
+        ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=200)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     except: return None, 0, None
 
     trend_4h = "NEUTRO"
     try:
-        ohlcv_4h = exchange.fetch_ohlcv(ticker_fix, '4h', limit=100)
+        ohlcv_4h = exchange.fetch_ohlcv(ticker_fix, '4h', limit=50)
         df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_4h['EMA_50'] = ta.ema(df_4h['close'], length=50)
         last_4h = df_4h.iloc[-1]
@@ -218,8 +256,9 @@ def get_mtf_data(symbol, tf_lower):
     obi = 0
     try:
         book = exchange.fetch_order_book(ticker_fix, limit=20)
-        bids, asks = sum([x[1] for x in book['bids']]), sum([x[1] for x in book['asks']])
-        if (bids + asks) > 0: obi = (bids - asks) / (bids + asks)
+        bids = sum([x[1] for x in book['bids']])
+        asks = sum([x[1] for x in book['asks']])
+        obi = (bids - asks) / (bids + asks) if (bids + asks) > 0 else 0
     except: pass
     return df, obi, trend_4h
 
@@ -240,7 +279,6 @@ def calculate_indicators(df):
     df = pd.concat([df, adx], axis=1)
     df['MFI'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
     
-    # Pivots
     high_w, low_w, close_w = df['high'].rolling(20).max(), df['low'].rolling(20).min(), df['close']
     df['PIVOT'] = (high_w + low_w + close_w) / 3
     df['R1'], df['S1'] = (2 * df['PIVOT']) - low_w, (2 * df['PIVOT']) - high_w
@@ -249,54 +287,50 @@ def calculate_indicators(df):
 # -----------------------------------------------------------------------------
 # 5. INTELIGENCIA (QUIMERA GPT) - ANÁLISIS DETALLADO
 # -----------------------------------------------------------------------------
-def generate_detailed_ai_analysis(row, trend_4h, obi, signal, adx_val, rsi_val, mfi_val):
+def generate_detailed_ai_analysis(row, mtf_trends, mtf_score, obi, fr, open_interest):
+    """
+    Genera un análisis técnico narrativo basado en confluencias.
+    """
     report = []
-    # 1. ESTRUCTURA DE MERCADO
-    if trend_4h == "BULLISH":
-        struct_txt = "La estructura macro (4H) es **ALCISTA**, favoreciendo posiciones largas."
-    elif trend_4h == "BEARISH":
-        struct_txt = "La estructura macro (4H) es **BAJISTA**, favoreciendo ventas en corto."
+    
+    # 1. CONTEXTO MULTI-TIMEFRAME
+    t_15m = mtf_trends.get('15m', 'NEUTRO')
+    t_1h = mtf_trends.get('1h', 'NEUTRO')
+    t_4h = mtf_trends.get('4h', 'NEUTRO')
+    
+    if mtf_score == 3:
+        context = "💎 **ALINEACIÓN PERFECTA:** Todos los marcos temporales (15m, 1H, 4H) son ALCISTAS."
+    elif mtf_score == -3:
+        context = "🩸 **ALINEACIÓN PERFECTA:** Todos los marcos temporales (15m, 1H, 4H) son BAJISTAS."
+    elif t_4h == "BULLISH" and t_15m == "BAJISTA":
+        context = "⚠️ **CORRECCIÓN EN CURSO:** Tendencia Macro Alcista, pero retroceso a corto plazo."
+    elif t_4h == "BEARISH" and t_15m == "ALCISTA":
+        context = "⚠️ **REBOTE TÉCNICO:** Tendencia Macro Bajista, posible rebote de gato muerto."
     else:
-        struct_txt = "La estructura macro es lateral/indecisa."
+        context = "⚖️ **MERCADO MIXTO:** Conflicto entre tendencias. Precaución."
     
-    ema_cross = "El precio cotiza por encima de las EMAs de corto plazo," if row['close'] > row['EMA_20'] else "El precio ha perdido las EMAs de corto plazo,"
-    report.append(f"📡 **ESTRUCTURA:** {struct_txt} {ema_cross} lo que sugiere presión {'compradora' if row['close'] > row['EMA_20'] else 'vendedora'} inmediata.")
+    report.append(f"📡 **ESTRUCTURA:** {context}")
 
-    # 2. FUERZA Y MOMENTO (ADX + RSI)
-    strength = "fuerte" if adx_val > 25 else "débil"
-    trend_state = "tendencia definida" if adx_val > 25 else "rango consolidado"
-    rsi_state = "sobrecompra" if rsi_val > 70 else "sobreventa" if rsi_val < 30 else "zona neutral"
+    # 2. DATOS DERIVADOS (OI + FUNDING)
+    deriv_txt = f"El Funding Rate está en **{fr:.4f}%**."
+    if fr > 0.01: deriv_txt += " Mercado muy apalancado en LONG (posible long squeeze)."
+    elif fr < -0.01: deriv_txt += " Mercado muy apalancado en SHORT (posible short squeeze)."
+    else: deriv_txt += " Mercado saludable."
     
-    momento_txt = f"📊 **MOMENTO:** El ADX ({adx_val:.1f}) indica una {trend_state} ({strength}). El RSI se encuentra en {rsi_val:.1f} ({rsi_state}), "
-    if rsi_val > 70: momento_txt += "advirtiendo posible corrección."
-    elif rsi_val < 30: momento_txt += "sugiriendo posible rebote."
-    else: momento_txt += "con espacio para recorrer."
-    report.append(momento_txt)
+    oi_txt = f"Interés Abierto estimado: **${open_interest/1000000:.1f}M**."
+    report.append(f"📊 **DERIVADOS:** {deriv_txt} {oi_txt}")
 
-    # 3. VOLUMEN Y FLUJO (OBI + MFI)
-    vol_txt = f"⛽ **VOLUMEN:** El flujo de dinero (MFI: {mfi_val:.0f}) "
-    if mfi_val > 60: vol_txt += "muestra entrada agresiva de capital."
-    elif mfi_val < 40: vol_txt += "indica salida de capital o falta de interés."
-    else: vol_txt += "es estable."
-    
-    obi_txt = "El Libro de Órdenes (OBI) muestra desequilibrio comprador." if obi > 0.05 else "El Libro de Órdenes (OBI) muestra presión vendedora." if obi < -0.05 else "El Libro de Órdenes está equilibrado."
-    report.append(f"{vol_txt} {obi_txt}")
+    # 3. FLUJO Y PRESIÓN (OBI)
+    obi_pct = obi * 100
+    pressure = "COMPRADORA" if obi > 0.05 else "VENDEDORA" if obi < -0.05 else "NEUTRA"
+    report.append(f"⛽ **LIBRO DE ÓRDENES:** Desequilibrio del **{obi_pct:.1f}%** a favor de la presión **{pressure}**.")
 
-    # 4. CONCLUSIÓN FINAL
-    if signal == "LONG":
-        concl = "🎯 **VEREDICTO:** Las condiciones técnicas se alinean para una **ENTRADA EN LARGO**. Confirmación de tendencia y volumen."
-    elif signal == "SHORT":
-        concl = "🎯 **VEREDICTO:** Las condiciones técnicas sugieren una **VENTA (CORTO)**. Debilidad estructural detectada."
-    else:
-        concl = "⏳ **VEREDICTO:** **ESPERAR**. El mercado presenta señales mixtas o contradicciones entre el marco temporal superior e inferior."
-        
-    return "\n\n".join(report) + f"\n\n{concl}"
+    return "\n\n".join(report)
 
 def run_strategy(df, obi, trend_4h, filters):
     row = df.iloc[-1]
     score, max_score, details = 0, 0, []
     
-    # PUNTUACIÓN
     if filters['use_mtf']:
         max_score += 2
         if trend_4h == "BULLISH": score += 2; details.append("<span class='badge-bull'>MACRO</span>")
@@ -324,7 +358,6 @@ def run_strategy(df, obi, trend_4h, filters):
     if score > threshold: signal = "LONG"
     elif score < -threshold: signal = "SHORT"
     
-    # FILTROS DE INVALIDACIÓN
     if filters['use_regime'] and row['ADX_14'] < 20: 
         signal = "NEUTRO"; details.append("<span class='badge-neutral'>ADX-LOW</span>")
         
@@ -341,7 +374,7 @@ def run_strategy(df, obi, trend_4h, filters):
     return signal, row['ATR'], prob, thermo_score, details
 
 # -----------------------------------------------------------------------------
-# 6. EJECUCIÓN Y DISPLAY
+# 6. EJECUCIÓN
 # -----------------------------------------------------------------------------
 def save_trades(df): df.to_csv(CSV_FILE, index=False)
 
@@ -418,22 +451,19 @@ df, obi, trend_4h = get_mtf_data(symbol, tf)
 
 if df is not None:
     df = calculate_indicators(df)
-    filters = {
-        'use_mtf': use_mtf, 'use_ema': use_ema, 'use_vwap': use_vwap, 
-        'use_ichi': use_ichi, 'use_regime': use_regime, 'use_rsi': use_rsi, 
-        'use_obi': use_obi
-    }
+    filters = {'use_mtf': use_mtf, 'use_ema': use_ema, 'use_vwap': use_vwap, 'use_ichi': use_ichi, 'use_regime': use_regime, 'use_rsi': use_rsi, 'use_obi': use_obi}
     signal, atr, prob, thermo_score, details_list = run_strategy(df, obi, trend_4h, filters)
     current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
-    mfi_val, adx_val, rsi_val = df['MFI'].iloc[-1], df['ADX_14'].iloc[-1], df['RSI'].iloc[-1]
+    mfi_val, adx_val = df['MFI'].iloc[-1], df['ADX_14'].iloc[-1]
     
-    # Datos Extra
+    # NUEVOS DATOS AVANZADOS
     fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
-    fr = get_funding_rate(symbol)
+    fr, open_interest = get_deriv_data(symbol)
+    mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
     
-    # ANÁLISIS IA GENERADO
-    ai_report = generate_detailed_ai_analysis(df.iloc[-1], trend_4h, obi, signal, adx_val, rsi_val, mfi_val)
+    # IA COPILOT GENERADO
+    ai_narrative = generate_detailed_ai_analysis(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest)
     
     setup = None
     calc_dir = signal 
@@ -490,7 +520,6 @@ if df is not None:
     tab1, tab2 = st.tabs(["📊 COMANDO CENTRAL", "🧪 PAPER TRADING"])
     
     with tab1:
-        # COLUMNAS SUPERIORES
         col_news, col_tech, col_fng = st.columns([1.5, 1, 1])
         with col_news:
             st.markdown("### 📰 MARKET FLASH")
@@ -525,16 +554,43 @@ if df is not None:
             fig_fng.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
             st.plotly_chart(fig_fng, use_container_width=True)
 
-        # NUEVA CAJA DE ANÁLISIS INTELIGENTE
-        st.markdown(f"<div class='ai-box'>🤖 <b>QUIMERA GPT ANALYSIS:</b><br><br>{ai_report}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='ai-box'>🤖 <b>QUIMERA COPILOT:</b><br><br>{ai_narrative}</div>", unsafe_allow_html=True)
         
-        # DATOS CLAVE
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Precio", f"${current_price:,.2f}")
-        c2.metric("Tendencia 4H", trend_4h, delta="Bullish" if trend_4h=="BULLISH" else "Bearish")
-        c3.metric("Funding Rate", f"{fr:.4f}%", delta_color="inverse")
-        adx_state = "Fuerte" if adx_val > 25 else "Débil"
-        c4.metric("FUERZA (ADX)", f"{adx_val:.1f}", adx_state)
+        
+        # NUEVAS MÉTRICAS WIDGETS
+        c2.metric("Funding Rate", f"{fr:.4f}%", delta_color="inverse")
+        c3.metric("Open Interest", f"${open_interest/1000000:.1f}M")
+        
+        # MTF SIMPLE
+        mtf_str = f"{mtf_trends['15m']} | {mtf_trends['1h']} | {mtf_trends['4h']}"
+        c4.metric("Tendencia MTF", mtf_str)
+
+        st.markdown("### 📊 RASTREADOR DE RENDIMIENTO (Paper Trading)")
+        df_stats = load_trades()
+        total_pnl_val = 0.0
+        win_rate = 0.0
+        open_count = 0
+        total_closed = 0
+        
+        if not df_stats.empty:
+            closed_s = df_stats[df_stats['status'] == 'CLOSED']
+            open_s = df_stats[df_stats['status'] == 'OPEN']
+            total_closed = len(closed_s)
+            open_count = len(open_s)
+            if total_closed > 0:
+                total_pnl_val = closed_s['pnl'].sum()
+                wins = len(closed_s[closed_s['pnl'] > 0])
+                win_rate = (wins / total_closed) * 100
+        
+        sc1, sc2, sc3, sc4 = st.columns(4)
+        sc1.metric("PnL Total", f"${total_pnl_val:.2f}", delta_color="normal")
+        sc2.metric("Win Rate", f"{win_rate:.1f}%")
+        sc3.metric("Trades Cerrados", total_closed)
+        sc4.metric("Trades Abiertos", open_count)
+        
+        st.divider()
 
         if setup:
             prob_str = f"{prob:.1f}%"
@@ -594,29 +650,6 @@ if df is not None:
         df_trades = load_trades()
         st.subheader("📈 Rendimiento Detallado")
         render_analytics(df_trades)
-        
-        # WIDGET DE ESTADÍSTICAS PAPER TRADING
-        total_pnl_val = 0.0
-        win_rate = 0.0
-        open_count = 0
-        total_closed = 0
-        
-        if not df_trades.empty:
-            closed_s = df_trades[df_trades['status'] == 'CLOSED']
-            open_s = df_trades[df_trades['status'] == 'OPEN']
-            total_closed = len(closed_s)
-            open_count = len(open_s)
-            if total_closed > 0:
-                total_pnl_val = closed_s['pnl'].sum()
-                wins = len(closed_s[closed_s['pnl'] > 0])
-                win_rate = (wins / total_closed) * 100
-        
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        sc1.metric("PnL Total", f"${total_pnl_val:.2f}", delta_color="normal")
-        sc2.metric("Win Rate", f"{win_rate:.1f}%")
-        sc3.metric("Trades Cerrados", total_closed)
-        sc4.metric("Trades Abiertos", open_count)
-        
         st.divider()
         if not df_trades.empty:
             open_trades = df_trades[df_trades['status'] == "OPEN"].copy()
