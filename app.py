@@ -570,7 +570,11 @@ if df is not None:
     elif signal == "NEUTRO": st.session_state.last_alert = "NEUTRO"
     
     manage_open_positions(current_price, cur_high, cur_low)
-    
+    # --- PRUEBA DE NOTIFICACIONES FORZADA ---
+    test_msg = "✅ PRUEBA DE NOTIFICACIÓN EXITOSA: El Bot está enviando mensajes."
+    send_telegram_msg(test_msg)
+    st.info("Mensaje de prueba de Telegram enviado (revisa tu chat).")
+    # -----------------------------------------
     tab1, tab2 = st.tabs(["📊 LIVE COMMAND", "🧪 PAPER TRADING"])
     
     with tab1:
