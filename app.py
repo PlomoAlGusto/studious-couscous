@@ -84,8 +84,6 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
-# API KEY COINGLASS (Respaldo)
-COINGLASS_API_KEY = "1d4579f4c59149c6b6a1d83494a4f67c"
 
 # -----------------------------------------------------------------------------
 # 2. MOTOR DE DATOS (CCXT POWERED)
