@@ -13,7 +13,7 @@ import numpy as np
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN DEL SISTEMA
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v5.1 Intelligence", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v5.2 Tactical", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -23,6 +23,21 @@ st.markdown("""
     .bearish {background-color: rgba(255, 0, 0, 0.1); border: 2px solid #FF0000; color: #FF0000;}
     .neutral {background-color: rgba(255, 255, 0, 0.1); border: 1px dashed #FFFF00; color: #FFFF00;}
     .prob-box {text-align: center; font-size: 18px; margin-bottom: 5px;}
+    
+    /* ESTILOS NUEVOS PARA LA TARJETA TÁCTICA */
+    .trade-setup {
+        background-color: #1E1E1E; 
+        padding: 15px; 
+        border-radius: 10px; 
+        border: 1px solid #555;
+        margin-top: 10px;
+        margin-bottom: 20px;
+        text-align: center;
+    }
+    .tp-green { color: #00FF00; font-weight: bold; font-size: 18px; }
+    .sl-red { color: #FF4444; font-weight: bold; font-size: 18px; }
+    .entry-blue { color: #44AAFF; font-weight: bold; font-size: 18px; }
+    .label-mini { font-size: 12px; color: #aaa; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -36,8 +51,8 @@ if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 # 2. CONFIGURACIÓN (SIDEBAR)
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v5.1")
-    st.caption("Intelligence Core")
+    st.title("🦁 QUIMERA TACTICAL")
+    st.caption("v5.2 Multi-Target")
     
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe", ["15m", "1h", "4h"], index=0)
@@ -52,7 +67,6 @@ with st.sidebar:
 
     with st.expander("💰 GESTIÓN DE RIESGO"):
         use_trailing = st.checkbox("Trailing Stop", True)
-        risk_per_trade = st.slider("Riesgo %", 0.5, 5.0, 1.0)
         
     auto_refresh = st.checkbox("🔄 AUTO-SCAN (60s)", False)
 
@@ -105,8 +119,6 @@ def calculate_indicators(df):
     # Ichimoku & BB
     ichi = ta.ichimoku(df['high'], df['low'], df['close'])[0]
     df = pd.concat([df, ichi], axis=1)
-    bb = ta.bbands(df['close'], length=20, std=2)
-    df = pd.concat([df, bb], axis=1)
     
     # Osciladores
     df['RSI'] = ta.rsi(df['close'], length=14)
@@ -128,60 +140,51 @@ def run_strategy_funnel(df, obi):
     row = df.iloc[-1]
     reasons = []
     
-    # Puntuación de Confluencia (Para la probabilidad)
+    # Puntuación de Confluencia
     score = 0
     max_score = 0
     
-    # 1. EMAs
     if use_ema:
         max_score += 1
         if row['EMA_20'] > row['EMA_50']: score += 1; reasons.append("EMAs")
         else: score -= 1
         
-    # 2. VWAP
     if use_vwap:
         max_score += 1
         if row['close'] > row['VWAP']: score += 1; reasons.append("VWAP")
         else: score -= 1
         
-    # 3. ICHIMOKU
     if use_ichi:
         max_score += 1
         cloud_top = max(row['ISA_9'], row['ISB_26'])
         if row['close'] > cloud_top: score += 1
         elif row['close'] < min(row['ISA_9'], row['ISB_26']): score -= 1
         
-    # 4. OBI
     if use_obi:
         max_score += 1
         if obi > 0.05: score += 1; reasons.append("OrderBook")
         elif obi < -0.05: score -= 1
 
-    # 5. OSCILADORES
     if use_rsi:
         max_score += 1
-        # Si RSI sube y no está sobrecomprado, suma punto
         if row['RSI'] > 50 and row['RSI'] < 70: score += 1
         elif row['RSI'] < 50 and row['RSI'] > 30: score -= 1
 
     # CÁLCULO DE SEÑAL
-    threshold = max_score * 0.4 # Umbral de activación
+    threshold = max_score * 0.4 
     signal = "NEUTRO"
     if score > threshold: signal = "LONG"
     elif score < -threshold: signal = "SHORT"
     
-    # Filtros de Veto (Regimen)
     if use_regime and row['ADX_14'] < 20: 
         signal = "NEUTRO"
         reasons = ["Mercado Lateral (ADX Bajo)"]
     
-    # CÁLCULO DE PROBABILIDAD (%)
-    # Normalizamos el score. Si score es igual a max_score -> 99%
+    # Probabilidad
+    probability = 50.0
     if max_score > 0:
         raw_prob = (abs(score) / max_score)
-        probability = 50 + (raw_prob * 45) # Base 50%, Max 95%
-    else:
-        probability = 50.0
+        probability = 50 + (raw_prob * 45) # Max 95%
         
     return signal, reasons, row['ATR'], probability
 
@@ -204,10 +207,10 @@ def manage_positions(current_price):
 
         # TP / SL Check
         if pos['type'] == "LONG":
-            if current_price >= pos['tp']: close_reason = "TP 🎯"; pnl = (pos['tp']-pos['entry'])*pos['size']
+            if current_price >= pos['tp3']: close_reason = "TP3 (Moonbag) 🚀"; pnl = (pos['tp3']-pos['entry'])*pos['size']
             elif current_price <= pos['sl']: close_reason = "SL 🛑"; pnl = (pos['sl']-pos['entry'])*pos['size']
         elif pos['type'] == "SHORT":
-            if current_price <= pos['tp']: close_reason = "TP 🎯"; pnl = (pos['entry']-pos['tp'])*pos['size']
+            if current_price <= pos['tp3']: close_reason = "TP3 (Moonbag) 🚀"; pnl = (pos['entry']-pos['tp3'])*pos['size']
             elif current_price >= pos['sl']: close_reason = "SL 🛑"; pnl = (pos['entry']-pos['sl'])*pos['size']
                 
         if close_reason:
@@ -233,107 +236,136 @@ if df is not None:
     current_price = df['close'].iloc[-1]
     last_row = df.iloc[-1]
     
-    # Alertas
+    # CÁLCULO DE NIVELES TÁCTICOS (TP1, TP2, TP3)
+    setup = None
+    if signal != "NEUTRO":
+        sl_dist = atr * 1.5
+        risk = sl_dist
+        
+        if signal == "LONG":
+            sl = current_price - sl_dist
+            tp1 = current_price + risk      # Ratio 1:1
+            tp2 = current_price + (risk*2)  # Ratio 1:2
+            tp3 = current_price + (risk*3.5)# Ratio 1:3.5
+        else:
+            sl = current_price + sl_dist
+            tp1 = current_price - risk
+            tp2 = current_price - (risk*2)
+            tp3 = current_price - (risk*3.5)
+            
+        setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3}
+
+    # GESTIÓN DE ALERTAS (AHORA CON TODOS LOS DATOS)
     if signal != "NEUTRO" and signal != st.session_state.last_alert:
-        send_telegram_msg(f"🦁 SIGNAL v5.1: {signal}\nActivo: {symbol}\nProb: {prob:.1f}%")
+        msg = f"""🦁 *QUIMERA SIGNAL: {signal}*
+Activo: {symbol}
+Probabilidad: {prob:.1f}%
+
+🔵 *ENTRADA:* ${current_price:.2f}
+
+🎯 *TP1:* ${setup['tp1']:.2f}
+🎯 *TP2:* ${setup['tp2']:.2f}
+🚀 *TP3:* ${setup['tp3']:.2f}
+
+🛑 *SL:* ${setup['sl']:.2f}
+"""
+        send_telegram_msg(msg)
         st.session_state.last_alert = signal
     elif signal == "NEUTRO": st.session_state.last_alert = "NEUTRO"
     
     manage_positions(current_price)
     
-    tab1, tab2, tab3 = st.tabs(["📊 COMANDO & PROBABILIDAD", "🧪 PAPER LAB", "🔮 AI FORECAST"])
+    tab1, tab2, tab3 = st.tabs(["📊 COMANDO", "🧪 PAPER LAB", "🔮 FORECAST"])
     
     with tab1:
-        # 1. SEÑAL GRANDE
+        # 1. SEÑAL Y PROBABILIDAD
         css = "neutral"
         if signal == "LONG": css = "bullish"
         elif signal == "SHORT": css = "bearish"
         
-        st.markdown(f"""
-        <div class='big-signal {css}'>
-            {signal}
-            <div style='font-size:14px; margin-top:5px; color:#ddd;'>
-                Estrategia: {' + '.join(reasons) if reasons else 'Sin confluencia clara'}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # 2. BARRA DE PROBABILIDAD (NUEVO)
-        col_prob1, col_prob2 = st.columns([1, 4])
-        with col_prob1:
-            st.markdown(f"<div class='prob-box'>Probabilidad<br><b>{prob:.1f}%</b></div>", unsafe_allow_html=True)
-        with col_prob2:
-            st.write("") # Espaciador
-            bar_color = "green" if prob > 70 else "yellow" if prob > 50 else "gray"
+        c_sig, c_prob = st.columns([1, 1])
+        with c_sig:
+            st.markdown(f"<div class='big-signal {css}'>{signal}</div>", unsafe_allow_html=True)
+        with c_prob:
+            st.markdown(f"<div class='prob-box'>Prob: <b>{prob:.1f}%</b></div>", unsafe_allow_html=True)
             st.progress(int(prob))
-            st.caption("Confluencia Técnica (Basado en filtros activos)")
 
-        st.divider()
-
-        # 3. COCKPIT DE DATOS DE INTERÉS (NUEVO)
-        st.subheader("🔍 Contexto de Mercado")
+        # 2. CONTEXTO DE MERCADO
+        st.subheader("🔍 Contexto")
         d1, d2, d3, d4 = st.columns(4)
         
-        # A. Salud del Volumen
-        vol_state = "Normal"
-        if last_row['volume'] > last_row['SMA_VOL'] * 1.5: vol_state = "🔥 ALTO (Interés)"
-        elif last_row['volume'] < last_row['SMA_VOL'] * 0.7: vol_state = "💤 BAJO (Sin fuerza)"
-        d1.metric("Volumen", vol_state, f"{(last_row['volume']/last_row['SMA_VOL']-1)*100:.1f}% vs Avg")
+        # Volumen
+        vol_state = "Bajo"
+        if last_row['volume'] > last_row['SMA_VOL'] * 1.5: vol_state = "🔥 ALTO"
+        d1.metric("Volumen", vol_state)
         
-        # B. Régimen de Mercado (ADX)
-        regime = "Lateral / Rango"
-        if last_row['ADX_14'] > 25: regime = "Tendencia Fuerte 🚀"
-        d2.metric("Régimen (ADX)", regime, f"{last_row['ADX_14']:.1f}")
+        # Régimen
+        regime = "Lateral"
+        if last_row['ADX_14'] > 25: regime = "Tendencia 🚀"
+        d2.metric("Régimen", regime, f"ADX: {last_row['ADX_14']:.1f}")
         
-        # C. Distancia a VWAP (Valor)
+        # Valor
         dist_vwap = ((current_price - last_row['VWAP']) / last_row['VWAP']) * 100
-        val_state = "Caro (Sobre VWAP)" if dist_vwap > 0 else "Barato (Bajo VWAP)"
-        d3.metric("Valor Justo", val_state, f"{dist_vwap:.2f}% dist")
+        d3.metric("Valor", f"{dist_vwap:.2f}%", "vs VWAP")
         
-        # D. Presión Order Book
+        # OBI
         obi_txt = "Neutro"
-        if obi > 0.05: obi_txt = "Toros dominan 🐂"
-        elif obi < -0.05: obi_txt = "Osos dominan 🐻"
-        d4.metric("Libro Órdenes", obi_txt, f"{obi:.2%}")
+        if obi > 0.05: obi_txt = "Toros 🐂"
+        elif obi < -0.05: obi_txt = "Osos 🐻"
+        d4.metric("Libro", obi_txt, f"{obi:.1%}")
 
         st.divider()
-        
-        # 4. GRÁFICO Y BOTONES
+
+        # 3. TARJETA DE ESTRATEGIA TÁCTICA (NUEVO !!!)
+        if signal != "NEUTRO" and setup:
+            st.subheader("🎯 Setup Táctico Sugerido")
+            st.markdown(f"""
+            <div class="trade-setup">
+                <div style="display: flex; justify-content: space-around;">
+                    <div><span class="label-mini">ENTRADA</span><br><span class="entry-blue">${setup['entry']:.2f}</span></div>
+                    <div><span class="label-mini">STOP LOSS</span><br><span class="sl-red">${setup['sl']:.2f}</span></div>
+                    <div><span class="label-mini">TP 1 (1:1)</span><br><span class="tp-green">${setup['tp1']:.2f}</span></div>
+                    <div><span class="label-mini">TP 2 (1:2)</span><br><span class="tp-green">${setup['tp2']:.2f}</span></div>
+                    <div><span class="label-mini">TP 3 (Moon)</span><br><span class="tp-green">${setup['tp3']:.2f}</span></div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if st.button(f"🚀 EJECUTAR {signal} (TP3 Objetivo)"):
+                trade = {"time": datetime.now(), "symbol": symbol, "type": signal, "entry": current_price, "sl": setup['sl'], "tp": setup['tp3'], "tp3": setup['tp3'], "size": 100, "atr_entry": atr, "status": "OPEN"}
+                st.session_state.positions.append(trade)
+                st.success("Orden enviada.")
+        else:
+            st.info("Esperando señal clara para generar Setup Táctico...")
+
+        # 4. GRÁFICO
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
         fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
         if use_vwap: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
+        
+        # PINTAR NIVELES SI HAY SEÑAL
+        if signal != "NEUTRO":
+            fig.add_hline(y=setup['tp1'], line_dash="dot", line_color="green", row=1, col=1)
+            fig.add_hline(y=setup['tp2'], line_dash="dot", line_color="green", row=1, col=1)
+            fig.add_hline(y=setup['sl'], line_dash="dot", line_color="red", row=1, col=1)
+
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['RSI'], line=dict(color='purple'), name='RSI'), row=2, col=1)
         fig.add_hline(y=70, row=2, col=1); fig.add_hline(y=30, row=2, col=1)
         fig.update_layout(height=500, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
-        if signal != "NEUTRO":
-            sl = current_price - (atr * 1.5) if signal == "LONG" else current_price + (atr * 1.5)
-            tp = current_price + (abs(current_price-sl)*2) if signal == "LONG" else current_price - (abs(current_price-sl)*2)
-            if st.button(f"🚀 EJECUTAR {signal} (CONFIRMADO)"):
-                trade = {"time": datetime.now(), "symbol": symbol, "type": signal, "entry": current_price, "sl": sl, "tp": tp, "size": 100, "atr_entry": atr, "status": "OPEN"}
-                st.session_state.positions.append(trade)
-                st.success("Orden enviada.")
-
     with tab2:
         st.metric("Balance Virtual", f"${st.session_state.balance:,.2f}")
         if st.session_state.positions:
             st.dataframe(pd.DataFrame(st.session_state.positions))
-        else: st.info("Mesa de operaciones limpia.")
-
+        
     with tab3:
-        if st.button("🔮 Consultar Prophet AI"):
-            with st.spinner("Procesando..."):
-                m = Prophet()
-                d_p = df[['timestamp', 'close']].rename(columns={'timestamp':'ds', 'close':'y'})
-                m.fit(d_p)
-                fut = m.make_future_dataframe(periods=12, freq='H')
-                fcst = m.predict(fut)
-                fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(x=d_p['ds'], y=d_p['y'], name='Real'))
-                fig2.add_trace(go.Scatter(x=fcst['ds'], y=fcst['yhat'], name='AI Trend', line=dict(color='cyan')))
-                st.plotly_chart(fig2, use_container_width=True)
+        if st.button("🔮 Prophet AI"):
+            m = Prophet(); d_p = df[['timestamp', 'close']].rename(columns={'timestamp':'ds', 'close':'y'})
+            m.fit(d_p); fut = m.make_future_dataframe(periods=12, freq='H'); fcst = m.predict(fut)
+            fig2 = go.Figure(); fig2.add_trace(go.Scatter(x=d_p['ds'], y=d_p['y'])); fig2.add_trace(go.Scatter(x=fcst['ds'], y=fcst['yhat'], line=dict(color='cyan')))
+            st.plotly_chart(fig2)
 
-else: st.warning("Cargando datos...")
+else: st.warning("Cargando...")
 
 if auto_refresh: time.sleep(60); st.rerun()
