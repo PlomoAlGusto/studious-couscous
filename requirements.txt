@@ -7,3 +7,4 @@ prophet
 requests
 numpy
 feedparser  
+scikit-learn==1.5.0
