@@ -9,11 +9,12 @@ import requests
 from datetime import datetime
 import time
 import numpy as np
+import os
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURACIÓN DEL SISTEMA
+# 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v5.3 Clear Vision", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v6.0 Institutional", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -22,60 +23,60 @@ st.markdown("""
     .bullish {background-color: rgba(0, 255, 0, 0.1); border: 2px solid #00FF00; color: #00FF00;}
     .bearish {background-color: rgba(255, 0, 0, 0.1); border: 2px solid #FF0000; color: #FF0000;}
     .neutral {background-color: rgba(255, 255, 0, 0.1); border: 1px dashed #FFFF00; color: #FFFF00;}
-    .prob-box {text-align: center; font-size: 18px; margin-bottom: 5px;}
     
-    /* ESTILOS NUEVOS PARA LA TARJETA TÁCTICA */
     .trade-setup {
-        background-color: #151515; 
-        padding: 20px; 
-        border-radius: 15px; 
-        border: 1px solid #444;
-        margin-top: 10px;
-        margin-bottom: 20px;
-        text-align: center;
+        background-color: #151515; padding: 20px; border-radius: 15px; border: 1px solid #444;
+        margin-top: 10px; margin-bottom: 20px; text-align: center;
         box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
     .tp-green { color: #00FF00; font-weight: bold; font-size: 18px; }
     .sl-red { color: #FF4444; font-weight: bold; font-size: 18px; }
     .entry-blue { color: #44AAFF; font-weight: bold; font-size: 18px; }
     .label-mini { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px;}
-    
     .direction-header-long { color: #00FF00; font-size: 22px; font-weight: 900; margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px; }
     .direction-header-short { color: #FF4444; font-size: 22px; font-weight: 900; margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-# VARIABLES DE ESTADO
-if 'balance' not in st.session_state: st.session_state.balance = 10000.0
-if 'positions' not in st.session_state: st.session_state.positions = []
-if 'trade_history' not in st.session_state: st.session_state.trade_history = []
+# GESTIÓN DE ARCHIVOS (PERSISTENCIA CSV)
+CSV_FILE = 'paper_trades.csv'
+if not os.path.exists(CSV_FILE):
+    df_empty = pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held"])
+    df_empty.to_csv(CSV_FILE, index=False)
+
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
+if 'balance' not in st.session_state: st.session_state.balance = 10000.0
 
 # -----------------------------------------------------------------------------
-# 2. CONFIGURACIÓN (SIDEBAR)
+# 2. CAPA DE CONFIGURACIÓN (SIDEBAR MODULAR)
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v5.3")
-    st.caption("Clear Vision Edition")
+    st.title("🦁 QUIMERA v6.0")
+    st.caption("Institutional Architect")
     
     symbol = st.text_input("Ticker", "BTC/USDT")
-    tf = st.selectbox("Timeframe", ["15m", "1h", "4h"], index=0)
+    tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
 
-    with st.expander("🛡️ FILTROS (CONFLUENCIA)", expanded=True):
-        use_ema = st.checkbox("Tendencia (EMAs)", True)
-        use_vwap = st.checkbox("VWAP Institucional", True)
-        use_ichi = st.checkbox("Nube Ichimoku", False)
-        use_regime = st.checkbox("Anti-Rango (ADX)", True)
+    with st.expander("🛡️ GRUPO A: FILTROS ESTRUCTURA", expanded=True):
+        use_mtf = st.checkbox("Filtro Macro (4H Trend)", True, help="Solo opera a favor de la tendencia de 4 horas.")
+        use_vwap = st.checkbox("Filtro VWAP (Institucional)", True)
+        use_ichi = st.checkbox("Filtro Nube Ichimoku", False)
+        use_regime = st.checkbox("Filtro Anti-Rango (ADX)", True)
+
+    with st.expander("🌊 GRUPO B: MOMENTO Y VOLUMEN"):
         use_rsi = st.checkbox("RSI & Stoch", True)
-        use_obi = st.checkbox("Order Book", True)
-
-    with st.expander("💰 GESTIÓN DE RIESGO"):
+        use_obi = st.checkbox("Order Book Imbalance", True)
+        
+    with st.expander("💰 GRUPO C: SALIDAS AVANZADAS"):
         use_trailing = st.checkbox("Trailing Stop", True)
+        use_breakeven = st.checkbox("Breakeven (+1.5%)", True)
+        use_time_stop = st.checkbox("Time Stop (12 Velas)", True)
+        risk_per_trade = st.slider("Riesgo %", 0.5, 5.0, 1.0)
         
     auto_refresh = st.checkbox("🔄 AUTO-SCAN (60s)", False)
 
 # -----------------------------------------------------------------------------
-# 3. DATOS & INDICADORES
+# 3. CAPA DE DATOS (DATA ENGINE MTF)
 # -----------------------------------------------------------------------------
 def init_exchange():
     try:
@@ -88,140 +89,210 @@ def init_exchange():
 exchange, source_name = init_exchange()
 
 @st.cache_data(ttl=15)
-def get_data_engine(symbol, tf):
-    if not exchange: return None, 0
+def get_mtf_data(symbol, tf_lower):
+    """Descarga datos del timeframe actual Y del timeframe superior (4h)"""
+    if not exchange: return None, 0, None
+    
     ticker_fix = symbol if "Binance" in source_name else "BTC/USDT"
+    
+    # 1. Datos Principales (ej: 15m)
     try:
-        ohlcv = exchange.fetch_ohlcv(ticker_fix, tf, limit=200)
+        ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=200)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    except: return None, 0
+    except: return None, 0, None
 
+    # 2. Datos Macro (4h) para Filtro MTF
+    trend_4h = "NEUTRO"
+    try:
+        ohlcv_4h = exchange.fetch_ohlcv(ticker_fix, '4h', limit=50)
+        df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df_4h['EMA_50'] = ta.ema(df_4h['close'], length=50)
+        last_4h = df_4h.iloc[-1]
+        if last_4h['close'] > last_4h['EMA_50']: trend_4h = "BULLISH"
+        else: trend_4h = "BEARISH"
+    except: pass
+
+    # 3. OBI Live
     obi = 0
     try:
         book = exchange.fetch_order_book(ticker_fix, limit=20)
         bids, asks = sum([x[1] for x in book['bids']]), sum([x[1] for x in book['asks']])
         if (bids + asks) > 0: obi = (bids - asks) / (bids + asks)
     except: pass
-    return df, obi
+    
+    return df, obi, trend_4h
 
+# -----------------------------------------------------------------------------
+# 4. CAPA LÓGICA (INDICADORES Y SEÑAL)
+# -----------------------------------------------------------------------------
 def calculate_indicators(df):
     if df is None: return None
     # Tendencia
     df['EMA_20'] = ta.ema(df['close'], length=20)
     df['EMA_50'] = ta.ema(df['close'], length=50)
     
-    # Volumen Relativo
-    df['SMA_VOL'] = ta.sma(df['volume'], length=20)
-    
-    # VWAP
+    # VWAP Manual
     try:
         vp = ((df['high'] + df['low'] + df['close'])/3) * df['volume']
         df['VWAP'] = vp.cumsum() / df['volume'].cumsum()
     except: df['VWAP'] = df['EMA_50']
     
-    # Ichimoku & BB
+    # Ichimoku
     ichi = ta.ichimoku(df['high'], df['low'], df['close'])[0]
     df = pd.concat([df, ichi], axis=1)
     
     # Osciladores
     df['RSI'] = ta.rsi(df['close'], length=14)
-    stoch = ta.stochrsi(df['close'], length=14)
-    df = pd.concat([df, stoch], axis=1)
-    
-    # Régimen
+    df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
     adx = ta.adx(df['high'], df['low'], df['close'], length=14)
     df = pd.concat([df, adx], axis=1)
-    df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
     
-    df = df.fillna(method='bfill').fillna(method='ffill')
-    return df
+    return df.fillna(method='bfill').fillna(method='ffill')
 
-# -----------------------------------------------------------------------------
-# 4. LÓGICA Y CÁLCULO DE PROBABILIDAD
-# -----------------------------------------------------------------------------
-def run_strategy_funnel(df, obi):
+def get_ai_advice(row, trend_4h, obi):
+    advice = []
+    if row['ADX_14'] < 20: advice.append("⚠️ Mercado Lateral: Cuidado con falsas rupturas.")
+    if trend_4h == "BULLISH": advice.append("✅ Tendencia Macro (4H) Alcista: Prioriza Longs.")
+    elif trend_4h == "BEARISH": advice.append("🔻 Tendencia Macro (4H) Bajista: Prioriza Shorts.")
+    if abs(obi) > 0.1: advice.append("🔥 Fuerte presión en el libro de órdenes.")
+    return " | ".join(advice)
+
+def run_strategy(df, obi, trend_4h):
     row = df.iloc[-1]
-    reasons = []
-    
-    # Puntuación de Confluencia
     score = 0
     max_score = 0
-    
+    reasons = []
+
+    # 1. MTF (El Rey de los Filtros)
+    if use_mtf:
+        max_score += 2 # Pesa doble
+        if trend_4h == "BULLISH": score += 2
+        elif trend_4h == "BEARISH": score -= 2
+        else: max_score -= 2 # Si no hay datos 4h, anulamos peso
+
+    # 2. EMAs
     if use_ema:
         max_score += 1
-        if row['EMA_20'] > row['EMA_50']: score += 1; reasons.append("EMAs")
+        if row['EMA_20'] > row['EMA_50']: score += 1; reasons.append("Cruce EMA")
         else: score -= 1
-        
+
+    # 3. VWAP
     if use_vwap:
         max_score += 1
-        if row['close'] > row['VWAP']: score += 1; reasons.append("VWAP")
+        if row['close'] > row['VWAP']: score += 1; reasons.append("VWAP Support")
         else: score -= 1
         
-    if use_ichi:
-        max_score += 1
-        cloud_top = max(row['ISA_9'], row['ISB_26'])
-        if row['close'] > cloud_top: score += 1
-        elif row['close'] < min(row['ISA_9'], row['ISB_26']): score -= 1
-        
+    # 4. OBI
     if use_obi:
         max_score += 1
-        if obi > 0.05: score += 1; reasons.append("OrderBook")
+        if obi > 0.05: score += 1; reasons.append("OrderBook Bull")
         elif obi < -0.05: score -= 1
-
-    if use_rsi:
-        max_score += 1
-        if row['RSI'] > 50 and row['RSI'] < 70: score += 1
-        elif row['RSI'] < 50 and row['RSI'] > 30: score -= 1
-
-    # CÁLCULO DE SEÑAL
-    threshold = max_score * 0.4 
+    
+    # Decisión
+    threshold = max_score * 0.4
     signal = "NEUTRO"
     if score > threshold: signal = "LONG"
     elif score < -threshold: signal = "SHORT"
     
-    if use_regime and row['ADX_14'] < 20: 
-        signal = "NEUTRO"
-        reasons = ["Mercado Lateral (ADX Bajo)"]
+    # Veto: RSI y Régimen
+    if use_rsi and (row['RSI'] > 70 and signal == "LONG"): signal = "NEUTRO"
+    if use_rsi and (row['RSI'] < 30 and signal == "SHORT"): signal = "NEUTRO"
+    if use_regime and row['ADX_14'] < 20: signal = "NEUTRO"; reasons = ["Rango (ADX < 20)"]
     
-    # Probabilidad
-    probability = 50.0
-    if max_score > 0:
-        raw_prob = (abs(score) / max_score)
-        probability = 50 + (raw_prob * 45) # Max 95%
-        
-    return signal, reasons, row['ATR'], probability
+    # Conflictos MTF
+    if use_mtf and signal == "LONG" and trend_4h == "BEARISH": signal = "NEUTRO"; reasons = ["Contra Tendencia 4H"]
+    if use_mtf and signal == "SHORT" and trend_4h == "BULLISH": signal = "NEUTRO"; reasons = ["Contra Tendencia 4H"]
+
+    prob = 50.0
+    if max_score > 0: prob = 50 + ((abs(score)/max_score)*45)
+    
+    return signal, reasons, row['ATR'], prob
 
 # -----------------------------------------------------------------------------
-# 5. GESTIÓN DE POSICIONES
+# 5. MOTOR DE PAPER TRADING (PERSISTENTE CSV)
 # -----------------------------------------------------------------------------
-def manage_positions(current_price):
-    for pos in st.session_state.positions[:]:
+def load_trades():
+    return pd.read_csv(CSV_FILE)
+
+def save_trades(df):
+    df.to_csv(CSV_FILE, index=False)
+
+def execute_trade(type, entry, sl, tp1, tp2, tp3, size, atr):
+    df = load_trades()
+    new_trade = {
+        "id": int(time.time()),
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "symbol": symbol,
+        "type": type,
+        "entry": entry,
+        "size": size,
+        "sl": sl,
+        "tp1": tp1,
+        "tp2": tp2,
+        "tp3": tp3,
+        "status": "OPEN",
+        "pnl": 0.0,
+        "reason": "Entry",
+        "candles_held": 0,
+        "atr_entry": atr
+    }
+    df = pd.concat([pd.DataFrame([new_trade]), df], ignore_index=True)
+    save_trades(df)
+    return new_trade
+
+def manage_open_positions(current_price):
+    df = load_trades()
+    open_trades = df[df['status'] == "OPEN"]
+    
+    if open_trades.empty: return
+
+    for index, row in open_trades.iterrows():
         close_reason = ""
         pnl = 0
         
-        # Trailing Stop Simulado
-        if use_trailing:
-            if pos['type'] == "LONG":
-                new_sl = current_price - (pos['atr_entry'] * 1.5)
-                if new_sl > pos['sl']: pos['sl'] = new_sl
-            elif pos['type'] == "SHORT":
-                new_sl = current_price + (pos['atr_entry'] * 1.5)
-                if new_sl < pos['sl']: pos['sl'] = new_sl
-
-        # TP / SL Check
-        if pos['type'] == "LONG":
-            if current_price >= pos['tp3']: close_reason = "TP3 (Moonbag) 🚀"; pnl = (pos['tp3']-pos['entry'])*pos['size']
-            elif current_price <= pos['sl']: close_reason = "SL 🛑"; pnl = (pos['sl']-pos['entry'])*pos['size']
-        elif pos['type'] == "SHORT":
-            if current_price <= pos['tp3']: close_reason = "TP3 (Moonbag) 🚀"; pnl = (pos['entry']-pos['tp3'])*pos['size']
-            elif current_price >= pos['sl']: close_reason = "SL 🛑"; pnl = (pos['entry']-pos['sl'])*pos['size']
+        # 1. Time Stop Check
+        if use_time_stop:
+            df.at[index, 'candles_held'] += 1
+            if df.at[index, 'candles_held'] > 12: # 12 velas sin profit
+                # Check si estamos en pérdida
+                current_pnl = (current_price - row['entry']) if row['type'] == "LONG" else (row['entry'] - current_price)
+                if current_pnl <= 0:
+                    close_reason = "Time Stop ⏳"
+        
+        # 2. Logic Updates
+        if not close_reason:
+            if row['type'] == "LONG":
+                # Trailing
+                if use_trailing:
+                    new_sl = current_price - (row['atr_entry'] * 1.5)
+                    if new_sl > row['sl']: df.at[index, 'sl'] = new_sl
+                # Breakeven
+                if use_breakeven and current_price > (row['entry'] * 1.015):
+                     if row['sl'] < row['entry']: df.at[index, 'sl'] = row['entry']
                 
+                # Exits
+                if current_price >= row['tp3']: close_reason = "TP3 Moon 🚀"; pnl = (row['tp3']-row['entry'])*row['size']
+                elif current_price <= row['sl']: close_reason = "SL 🛑"; pnl = (row['sl']-row['entry'])*row['size']
+            
+            else: # SHORT
+                if use_trailing:
+                    new_sl = current_price + (row['atr_entry'] * 1.5)
+                    if new_sl < row['sl']: df.at[index, 'sl'] = new_sl
+                if use_breakeven and current_price < (row['entry'] * 0.985):
+                     if row['sl'] > row['entry']: df.at[index, 'sl'] = row['entry']
+
+                if current_price <= row['tp3']: close_reason = "TP3 Moon 🚀"; pnl = (row['entry']-row['tp3'])*row['size']
+                elif current_price >= row['sl']: close_reason = "SL 🛑"; pnl = (row['entry']-row['sl'])*row['size']
+
         if close_reason:
-            st.session_state.balance += pnl
-            pos['status'] = "CLOSED"; pos['exit'] = current_price; pos['pnl'] = pnl; pos['reason'] = close_reason
-            st.session_state.trade_history.insert(0, pos)
-            st.session_state.positions.remove(pos)
+            df.at[index, 'status'] = "CLOSED"
+            df.at[index, 'pnl'] = pnl
+            df.at[index, 'reason'] = close_reason
+            st.toast(f"Posición Cerrada: {close_reason}")
+            send_telegram_msg(f"💰 CIERRE {symbol}: {close_reason}\nPnL: ${pnl:.2f}")
+
+    save_trades(df)
 
 def send_telegram_msg(msg):
     t, c = st.secrets.get("TELEGRAM_TOKEN", ""), st.secrets.get("TELEGRAM_CHAT_ID", "")
@@ -232,131 +303,80 @@ def send_telegram_msg(msg):
 # -----------------------------------------------------------------------------
 # 6. DASHBOARD PRINCIPAL
 # -----------------------------------------------------------------------------
-df, obi = get_data_engine(symbol, tf)
+df, obi, trend_4h = get_mtf_data(symbol, tf)
 
 if df is not None:
     df = calculate_indicators(df)
-    signal, reasons, atr, prob = run_strategy_funnel(df, obi)
+    signal, reasons, atr, prob = run_strategy(df, obi, trend_4h)
     current_price = df['close'].iloc[-1]
-    last_row = df.iloc[-1]
     
-    # CÁLCULO DE NIVELES TÁCTICOS
+    # Copilot Advice
+    advice = get_ai_advice(df.iloc[-1], trend_4h, obi)
+    
+    # Táctica
     setup = None
     if signal != "NEUTRO":
         sl_dist = atr * 1.5
         risk = sl_dist
-        
         if signal == "LONG":
             sl = current_price - sl_dist
-            tp1 = current_price + risk      
-            tp2 = current_price + (risk*2)  
-            tp3 = current_price + (risk*3.5)
+            tp1, tp2, tp3 = current_price+risk, current_price+(risk*2), current_price+(risk*3.5)
             direction_emoji = "⬆️ COMPRA"
         else:
             sl = current_price + sl_dist
-            tp1 = current_price - risk
-            tp2 = current_price - (risk*2)
-            tp3 = current_price - (risk*3.5)
+            tp1, tp2, tp3 = current_price-risk, current_price-(risk*2), current_price-(risk*3.5)
             direction_emoji = "⬇️ VENTA"
-            
         setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'dir': direction_emoji}
 
-    # GESTIÓN DE ALERTAS TELEGRAM
+    # Alertas
     if signal != "NEUTRO" and signal != st.session_state.last_alert:
-        msg = f"""🦁 *QUIMERA SIGNAL: {signal}*
-Activo: {symbol}
-Probabilidad: {prob:.1f}%
-
-🔥 *OPERACIÓN: {setup['dir']}*
-
-🔵 *ENTRADA:* ${current_price:.2f}
-
-🎯 *TP1:* ${setup['tp1']:.2f}
-🎯 *TP2:* ${setup['tp2']:.2f}
-🚀 *TP3:* ${setup['tp3']:.2f}
-
-🛑 *SL:* ${setup['sl']:.2f}
-"""
-        send_telegram_msg(msg)
+        send_telegram_msg(f"🦁 v6.0 PRO: {signal} {symbol}\nMTF 4H: {trend_4h}\nProb: {prob:.1f}%")
         st.session_state.last_alert = signal
     elif signal == "NEUTRO": st.session_state.last_alert = "NEUTRO"
     
-    manage_positions(current_price)
+    # Ejecutar Gestión de Posiciones (Loop)
+    manage_open_positions(current_price)
     
-    tab1, tab2, tab3 = st.tabs(["📊 COMANDO", "🧪 PAPER LAB", "🔮 FORECAST"])
+    # --- UI ---
+    tab1, tab2 = st.tabs(["📊 LIVE COMMAND", "🧪 PAPER TRADING (CSV)"])
     
     with tab1:
-        # 1. SEÑAL Y PROBABILIDAD
-        css = "neutral"
-        if signal == "LONG": css = "bullish"
-        elif signal == "SHORT": css = "bearish"
+        # HEADER DE ESTADO
+        st.info(f"🤖 AI COPILOT: {advice}")
         
-        c_sig, c_prob = st.columns([1, 1])
-        with c_sig:
-            st.markdown(f"<div class='big-signal {css}'>{signal}</div>", unsafe_allow_html=True)
-        with c_prob:
-            st.markdown(f"<div class='prob-box'>Prob: <b>{prob:.1f}%</b></div>", unsafe_allow_html=True)
-            st.progress(int(prob))
+        # METRICAS
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Precio", f"${current_price:,.2f}")
+        c2.metric("Tendencia 4H", trend_4h, delta="Bullish" if trend_4h=="BULLISH" else "Bearish", delta_color="normal")
+        c3.metric("OBI", f"{obi:.1%}")
+        c4.metric("Probabilidad", f"{prob:.1f}%")
 
-        # 2. CONTEXTO DE MERCADO
-        st.subheader("🔍 Contexto")
-        d1, d2, d3, d4 = st.columns(4)
-        
-        vol_state = "Bajo"
-        if last_row['volume'] > last_row['SMA_VOL'] * 1.5: vol_state = "🔥 ALTO"
-        d1.metric("Volumen", vol_state)
-        
-        regime = "Lateral"
-        if last_row['ADX_14'] > 25: regime = "Tendencia 🚀"
-        d2.metric("Régimen", regime, f"ADX: {last_row['ADX_14']:.1f}")
-        
-        dist_vwap = ((current_price - last_row['VWAP']) / last_row['VWAP']) * 100
-        d3.metric("Valor", f"{dist_vwap:.2f}%", "vs VWAP")
-        
-        obi_txt = "Neutro"
-        if obi > 0.05: obi_txt = "Toros 🐂"
-        elif obi < -0.05: obi_txt = "Osos 🐻"
-        d4.metric("Libro", obi_txt, f"{obi:.1%}")
-
-        st.divider()
-
-        # 3. TARJETA DE ESTRATEGIA TÁCTICA (VISUAL CLARO)
+        # TARJETA TÁCTICA
         if signal != "NEUTRO" and setup:
-            st.subheader("🎯 Setup Táctico")
-            
-            # Definir colores y texto del encabezado según señal
             header_class = "direction-header-long" if signal == "LONG" else "direction-header-short"
-            
             st.markdown(f"""
             <div class="trade-setup">
-                <div class="{header_class}">
-                    OPERACIÓN: {setup['dir']}
-                </div>
+                <div class="{header_class}">OPERACIÓN: {setup['dir']}</div>
                 <div style="display: flex; justify-content: space-around;">
                     <div><span class="label-mini">ENTRADA</span><br><span class="entry-blue">${setup['entry']:.2f}</span></div>
                     <div><span class="label-mini">STOP LOSS</span><br><span class="sl-red">${setup['sl']:.2f}</span></div>
                     <div><span class="label-mini">TP 1</span><br><span class="tp-green">${setup['tp1']:.2f}</span></div>
-                    <div><span class="label-mini">TP 2</span><br><span class="tp-green">${setup['tp2']:.2f}</span></div>
                     <div><span class="label-mini">TP 3</span><br><span class="tp-green">${setup['tp3']:.2f}</span></div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
             
-            if st.button(f"🚀 EJECUTAR {signal} (SIMULADO)"):
-                trade = {"time": datetime.now(), "symbol": symbol, "type": signal, "entry": current_price, "sl": setup['sl'], "tp": setup['tp3'], "tp3": setup['tp3'], "size": 100, "atr_entry": atr, "status": "OPEN"}
-                st.session_state.positions.append(trade)
-                st.success("Orden enviada.")
-        else:
-            st.info("Esperando señal clara para generar Setup Táctico...")
-
-        # 4. GRÁFICO
+            if st.button(f"🚀 EJECUTAR {signal} (PAPER CSV)"):
+                execute_trade(signal, current_price, setup['sl'], setup['tp1'], setup['tp2'], setup['tp3'], 100, atr)
+                st.success("Guardado en paper_trades.csv")
+        
+        # GRÁFICO
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
         fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
         if use_vwap: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
         
-        if signal != "NEUTRO":
+        if signal != "NEUTRO" and setup:
             fig.add_hline(y=setup['tp1'], line_dash="dot", line_color="green", row=1, col=1)
-            fig.add_hline(y=setup['tp2'], line_dash="dot", line_color="green", row=1, col=1)
             fig.add_hline(y=setup['sl'], line_dash="dot", line_color="red", row=1, col=1)
 
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['RSI'], line=dict(color='purple'), name='RSI'), row=2, col=1)
@@ -365,17 +385,23 @@ Probabilidad: {prob:.1f}%
         st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
-        st.metric("Balance Virtual", f"${st.session_state.balance:,.2f}")
-        if st.session_state.positions:
-            st.dataframe(pd.DataFrame(st.session_state.positions))
+        df_trades = load_trades()
+        open_trades = df_trades[df_trades['status'] == "OPEN"]
+        closed_trades = df_trades[df_trades['status'] == "CLOSED"]
         
-    with tab3:
-        if st.button("🔮 Prophet AI"):
-            m = Prophet(); d_p = df[['timestamp', 'close']].rename(columns={'timestamp':'ds', 'close':'y'})
-            m.fit(d_p); fut = m.make_future_dataframe(periods=12, freq='H'); fcst = m.predict(fut)
-            fig2 = go.Figure(); fig2.add_trace(go.Scatter(x=d_p['ds'], y=d_p['y'])); fig2.add_trace(go.Scatter(x=fcst['ds'], y=fcst['yhat'], line=dict(color='cyan')))
-            st.plotly_chart(fig2)
+        st.subheader("🟢 Posiciones Abiertas (Vigiladas por TimeStop)")
+        if not open_trades.empty:
+            st.dataframe(open_trades[['time', 'symbol', 'type', 'entry', 'sl', 'tp3', 'candles_held']])
+        else: st.info("No hay operaciones en curso.")
+        
+        st.subheader("📜 Historial Cerrado")
+        st.dataframe(closed_trades[['time', 'symbol', 'type', 'pnl', 'reason']])
+        
+        # Metrics
+        if not closed_trades.empty:
+            total_pnl = closed_trades['pnl'].sum()
+            st.metric("PnL Total Acumulado", f"${total_pnl:.2f}")
 
-else: st.warning("Cargando...")
+else: st.warning("Cargando Motores MTF...")
 
 if auto_refresh: time.sleep(60); st.rerun()
