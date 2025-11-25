@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v15.6 Stable", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v15.8 Fixed", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -48,7 +48,6 @@ st.markdown("""
     .clock-closed { background-color: rgba(255, 0, 0, 0.1); border: 1px solid #555; color: #888; }
     
     .status-dot-on { color: #00FF00; font-weight: bold; text-shadow: 0 0 5px #00FF00; }
-    .status-dot-off { color: #FF4444; font-weight: bold; }
     
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
@@ -67,7 +66,8 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
-# CLAVE API (Directa para evitar problemas)
+# --- CLAVE API (Directa para que funcione YA) ---
+# En producción, usa st.secrets
 COINGLASS_API_KEY = "1d4579f4c59149c6b6a1d83494a4f67c"
 
 # -----------------------------------------------------------------------------
@@ -107,9 +107,6 @@ def get_market_sessions():
 
 @st.cache_data(ttl=120)
 def get_deriv_data(symbol):
-    """
-    Obtiene Funding Rate y Open Interest usando Headers falsos para evitar bloqueos.
-    """
     base_coin = symbol.split('/')[0]
     headers_browser = {'User-Agent': 'Mozilla/5.0'}
     
@@ -142,9 +139,7 @@ def get_deriv_data(symbol):
         r = requests.get(url, headers=headers_browser, timeout=3).json()
         if r['retCode'] == 0:
             info = r['result']['list'][0]
-            fr = float(info['fundingRate']) * 100
-            oi_val = float(info['openInterestValue'])
-            return fr, oi_val, "Bybit"
+            return float(info['fundingRate']) * 100, float(info['openInterestValue']), "Bybit"
     except: pass
 
     # 3. DYDX
@@ -153,9 +148,7 @@ def get_deriv_data(symbol):
         url = f"https://api.dydx.exchange/v3/markets/{dydx_symbol}"
         r = requests.get(url, headers=headers_browser, timeout=3).json()
         market = r['market']
-        fr = float(market['nextFundingRate']) * 100
-        oi = float(market['openInterest'])
-        return fr, oi, "dYdX"
+        return float(market['nextFundingRate']) * 100, float(market['openInterest']), "dYdX"
     except: pass
 
     return 0.0, 0.0, "Error"
@@ -181,7 +174,7 @@ def get_mtf_trends_analysis(symbol):
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v15.6")
+    st.title("🦁 QUIMERA v15.8")
     st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
     get_market_sessions()
     st.divider()
@@ -296,7 +289,6 @@ def calculate_indicators(df):
 # 5. IA ANALISTA
 # -----------------------------------------------------------------------------
 def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src):
-    # 1. CONTEXTO MULTI-TIMEFRAME
     t_15m = mtf_trends.get('15m', 'NEUTRO')
     t_1h = mtf_trends.get('1h', 'NEUTRO')
     t_4h = mtf_trends.get('4h', 'NEUTRO')
@@ -307,7 +299,6 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     elif t_4h == "BEAR" and t_15m == "BULL": context = "<span style='color:#FFFF00'>REBOTE TÉCNICO</span> (Macro Bajista / Micro Alcista)"
     else: context = "MERCADO MIXTO (Conflicto de Temporalidades)"
     
-    # 2. DATOS DERIVADOS
     deriv_txt = f"Funding Rate: <b style='color:#fff'>{fr:.4f}%</b>"
     if fr > 0.01: deriv_txt += " (Long Squeeze Risk)"
     elif fr < -0.01: deriv_txt += " (Short Squeeze Risk)"
@@ -650,7 +641,8 @@ if df is not None:
         else: st.info("Esperando estructura de mercado clara...")
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-        fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price', name=f'{source_name} Data'), row=1, col=1)
+        # CORRECCION: Un solo 'name' en el grafico
+        fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name=f'{source_name} Data'), row=1, col=1)
         if use_vwap: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
         last_pivot, last_s1, last_r1 = df.iloc[-1]['PIVOT'], df.iloc[-1]['S1'], df.iloc[-1]['R1']
         fig.add_hline(y=last_pivot, line_dash="dash", line_color="gray", annotation_text="Pivote", row=1, col=1)
@@ -662,7 +654,7 @@ if df is not None:
         fig.add_trace(go.Scatter(x=df['timestamp'], y=df['RSI'], line=dict(color='purple'), name='RSI'), row=2, col=1)
         fig.add_hline(y=70, row=2, col=1); fig.add_hline(y=30, row=2, col=1)
         
-        # Actualizar titulo del grafico con la fuente
+        # Titulo dinámico
         fig.update_layout(title=f"Chart Source: {source_name}", template="plotly_dark", height=500, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
