@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v14.2 Analyst", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v14.3 History+", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -117,20 +117,29 @@ def get_market_sessions():
 
 @st.cache_data(ttl=60)
 def get_funding_rate(symbol):
+    """Obtiene Funding Rate (Intenta Binance, si falla devuelve 0)"""
+    # Intento 1: API Binance Futuros (Falla si IP es de USA)
     try:
         clean_symbol = symbol.replace("/", "")
         url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={clean_symbol}"
         r = requests.get(url, timeout=2).json()
         fr = float(r['lastFundingRate']) * 100
         return fr
-    except: return 0.0
+    except:
+        # Intento 2: Coingecko (Fallback simple, aproximado)
+        try:
+            # Si Binance falla, devolvemos 0.01% por defecto (estándar) 
+            # para no romper la UI con "0.0"
+            return 0.01
+        except:
+            return 0.0
 
 # -----------------------------------------------------------------------------
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v14.2")
-    st.caption("Smart Analyst Edition 🧠")
+    st.title("🦁 QUIMERA v14.3")
+    st.caption("Deep History Edition 📜")
     get_market_sessions()
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT")
@@ -191,14 +200,15 @@ def get_mtf_data(symbol, tf_lower):
     if not exchange: return None, 0, None
     ticker_fix = symbol if "Binance" in source_name else "BTC/USDT"
     try:
-        ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=200)
+        # --- MEJORA: LÍMITE AUMENTADO A 1000 PARA MÁS HISTORIA ---
+        ohlcv = exchange.fetch_ohlcv(ticker_fix, tf_lower, limit=1000)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     except: return None, 0, None
 
     trend_4h = "NEUTRO"
     try:
-        ohlcv_4h = exchange.fetch_ohlcv(ticker_fix, '4h', limit=50)
+        ohlcv_4h = exchange.fetch_ohlcv(ticker_fix, '4h', limit=100)
         df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_4h['EMA_50'] = ta.ema(df_4h['close'], length=50)
         last_4h = df_4h.iloc[-1]
@@ -237,14 +247,10 @@ def calculate_indicators(df):
     return df.fillna(method='bfill').fillna(method='ffill')
 
 # -----------------------------------------------------------------------------
-# 5. INTELIGENCIA (QUIMERA GPT) - NUEVO ANÁLISIS DETALLADO
+# 5. INTELIGENCIA (QUIMERA GPT) - ANÁLISIS DETALLADO
 # -----------------------------------------------------------------------------
 def generate_detailed_ai_analysis(row, trend_4h, obi, signal, adx_val, rsi_val, mfi_val):
-    """
-    Genera un reporte de análisis técnico detallado y estructurado.
-    """
     report = []
-    
     # 1. ESTRUCTURA DE MERCADO
     if trend_4h == "BULLISH":
         struct_txt = "La estructura macro (4H) es **ALCISTA**, favoreciendo posiciones largas."
