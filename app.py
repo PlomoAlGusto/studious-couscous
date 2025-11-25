@@ -15,14 +15,13 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v13.7 Chronos", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v13.8 Chronos", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
     .metric-card {background-color: #262730; padding: 10px; border-radius: 8px; border: 1px solid #444;}
     .big-signal {font-size: 24px; font-weight: bold; text-align: center; padding: 15px; border-radius: 10px; margin-bottom: 20px;}
     
-    /* CAJA PRINCIPAL DEL TRADE */
     .trade-setup {
         background-color: #151515; 
         padding: 20px; 
@@ -55,17 +54,14 @@ st.markdown("""
     .news-link:hover { color: #44AAFF; }
     .news-time { color: #666; font-size: 11px; margin-right: 5px; font-weight: bold;}
     
-    /* ESTILO RELOJES */
     .market-clock { font-size: 12px; padding: 5px; margin-bottom: 5px; border-radius: 4px; display: flex; justify-content: space-between;}
     .clock-open { background-color: rgba(0, 255, 0, 0.2); border: 1px solid #00FF00; }
     .clock-closed { background-color: rgba(255, 0, 0, 0.1); border: 1px solid #555; color: #888; }
     
-    /* BADGES INDICADORES */
     .badge-bull { background-color: #004400; color: #00FF00; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #00FF00; margin-right: 4px; }
     .badge-bear { background-color: #440000; color: #FF4444; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #FF4444; margin-right: 4px; }
     .badge-neutral { background-color: #333; color: #aaa; padding: 2px 6px; border-radius: 4px; font-size: 10px; border: 1px solid #555; margin-right: 4px; }
     
-    /* STATS BAR */
     .stats-bar {
         background-color: #1E1E1E; border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 20px;
         display: flex; justify-content: space-around; align-items: center;
@@ -75,8 +71,10 @@ st.markdown("""
 
 # GESTIÓN DE ARCHIVOS
 CSV_FILE = 'paper_trades.csv'
+COLUMNS_DB = ["id", "time", "symbol", "type", "entry", "size", "leverage", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"]
+
 if not os.path.exists(CSV_FILE):
-    df_empty = pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
+    df_empty = pd.DataFrame(columns=COLUMNS_DB)
     df_empty.to_csv(CSV_FILE, index=False)
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
@@ -99,7 +97,7 @@ def get_market_sessions():
         st.sidebar.markdown(f"<div class='market-clock {css_class}'><span>{name}</span><span>{status_icon}</span></div>", unsafe_allow_html=True)
 
 with st.sidebar:
-    st.title("🦁 QUIMERA v13.7")
+    st.title("🦁 QUIMERA v13.8")
     st.caption("Chronos Edition ⏳")
     get_market_sessions()
     st.divider()
@@ -296,19 +294,22 @@ def run_strategy(df, obi, trend_4h, filters):
 # 5. GESTIÓN PAPER TRADING
 # -----------------------------------------------------------------------------
 def load_trades():
-    if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
+    if not os.path.exists(CSV_FILE): 
+        return pd.DataFrame(columns=COLUMNS_DB)
     try:
         df = pd.read_csv(CSV_FILE)
-        if df.empty: return pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
+        # Fix para CSV antiguo sin columna leverage
+        if 'leverage' not in df.columns:
+            df['leverage'] = 1.0
         return df
-    except: return pd.DataFrame(columns=["id", "time", "symbol", "type", "entry", "size", "sl", "tp1", "tp2", "tp3", "status", "pnl", "reason", "candles_held", "atr_entry"])
+    except: return pd.DataFrame(columns=COLUMNS_DB)
 
 def save_trades(df):
     df.to_csv(CSV_FILE, index=False)
 
-def execute_trade(type, entry, sl, tp1, tp2, tp3, size, atr):
+def execute_trade(type, entry, sl, tp1, tp2, tp3, size, atr, leverage):
     df = load_trades()
-    new = {"id": int(time.time()), "time": datetime.now().strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "type": type, "entry": entry, "size": size, "sl": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3, "status": "OPEN", "pnl": 0.0, "reason": "Entry", "candles_held": 0, "atr_entry": atr}
+    new = {"id": int(time.time()), "time": datetime.now().strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "type": type, "entry": entry, "size": size, "leverage": leverage, "sl": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3, "status": "OPEN", "pnl": 0.0, "reason": "Entry", "candles_held": 0, "atr_entry": atr}
     df = pd.concat([pd.DataFrame([new]), df], ignore_index=True)
     save_trades(df)
     return new
@@ -401,21 +402,28 @@ if df is not None:
         else: calc_dir = None
 
     qty = 0
+    leverage = 1.0
     if calc_dir:
         sl_dist = atr * 1.5
         risk = sl_dist
         risk_amount = account_size * (risk_per_trade / 100)
         qty = risk_amount / risk if risk > 0 else 0
+        
+        # CÁLCULO DE APALANCAMIENTO DINÁMICO
+        notional_value = qty * current_price
+        leverage = notional_value / account_size
+        if leverage < 1: leverage = 1.0
+
         if calc_dir == "LONG":
             sl, tp1, tp2, tp3 = current_price-sl_dist, current_price+risk, current_price+(risk*2), current_price+(risk*3.5)
             emoji = "⬆️ LONG"
         else:
             sl, tp1, tp2, tp3 = current_price+sl_dist, current_price-risk, current_price-(risk*2), current_price-(risk*3.5)
             emoji = "⬇️ SHORT"
-        setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'dir': emoji, 'status': setup_type, 'qty': qty}
+        setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'dir': emoji, 'status': setup_type, 'qty': qty, 'lev': leverage}
 
     if signal != "NEUTRO" and signal != st.session_state.last_alert and setup:
-        # MENSAJE DETALLADO DE TELEGRAM RESTAURADO
+        # MENSAJE DETALLADO DE TELEGRAM + APALANCAMIENTO
         msg = f"""🦁 *QUIMERA SIGNAL DETECTED* 🦁
 
 📉 *ACTIVO:* {symbol}
@@ -430,6 +438,7 @@ if df is not None:
 🚀 *TP 3:* ${setup['tp3']:.2f}
 
 ⚖️ *LOTE:* {setup['qty']:.4f}
+⚙️ *LEV:* {setup['lev']:.1f}x
 """
         send_telegram_msg(msg)
         st.session_state.last_alert = signal
@@ -454,7 +463,6 @@ if df is not None:
             else: st.info("Sin noticias recientes.")
         
         with col_tech:
-            # FIX: rgba(0,0,0,0) for transparency
             fig_thermo = go.Figure(go.Indicator(
                 mode = "gauge+number", value = thermo_score, domain = {'x': [0, 1], 'y': [0, 1]},
                 title = {'text': "<span style='font-size:16px'>Bot Sentiment</span>"},
@@ -489,7 +497,6 @@ if df is not None:
         adx_state = "Fuerte" if adx_val > 25 else "Débil"
         c4.metric("FUERZA (ADX)", f"{adx_val:.1f}", adx_state)
 
-        # WIDGET DE ESTADÍSTICAS PAPER TRADING
         st.markdown("### 📊 RASTREADOR DE RENDIMIENTO (Paper Trading)")
         df_stats = load_trades()
         total_pnl_val = 0.0
@@ -538,7 +545,7 @@ if df is not None:
             <div style='width: {prob}%; background-color: {prob_color}; height: 6px; border-radius: 4px; box-shadow: 0 0 5px {prob_color};'></div>
         </div>
     </div>
-    <p style="color:#888; font-size:14px;">Posición: <span style="color:white; font-weight:bold">{setup['qty']:.4f} {symbol.split('/')[0]}</span> (Riesgo ${risk_amount:.1f})</p>
+    <p style="color:#888; font-size:14px;">Posición: <span style="color:white; font-weight:bold">{setup['qty']:.4f} {symbol.split('/')[0]}</span> (Riesgo ${risk_amount:.1f}) | <span style="color:#44AAFF; font-weight:bold">LEV: {setup['lev']:.1f}x</span></p>
     <div style="display: flex; justify-content: space-around; margin-top: 10px;">
         <div><span class="label-mini">ENTRADA</span><br><span class="entry-blue">${setup['entry']:.2f}</span></div>
         <div><span class="label-mini">STOP LOSS</span><br><span class="sl-red">${setup['sl']:.2f}</span></div>
@@ -550,7 +557,7 @@ if df is not None:
 """
             st.markdown(html_card, unsafe_allow_html=True)
             if st.button(btn_label):
-                execute_trade(calc_dir, current_price, setup['sl'], setup['tp1'], setup['tp2'], setup['tp3'], setup['qty'], atr)
+                execute_trade(calc_dir, current_price, setup['sl'], setup['tp1'], setup['tp2'], setup['tp3'], setup['qty'], atr, setup['lev'])
                 st.success(f"Orden {calc_dir} lanzada.")
         else: st.info("Esperando estructura de mercado clara...")
 
@@ -581,11 +588,14 @@ if df is not None:
             if not open_trades.empty:
                 open_trades['Floating PnL'] = np.where(open_trades['type'] == 'LONG', (current_price - open_trades['entry']) * open_trades['size'], (open_trades['entry'] - current_price) * open_trades['size'])
                 def color_floating(val): return f'color: {"#00FF00" if val > 0 else "#FF4444"}; font-weight: bold;'
-                st.dataframe(open_trades[['time', 'symbol', 'type', 'entry', 'size', 'sl', 'tp3', 'Floating PnL']].style.applymap(color_floating, subset=['Floating PnL']), use_container_width=True)
+                
+                # Muestra la columna 'leverage'
+                cols_show = ['time', 'symbol', 'type', 'leverage', 'entry', 'size', 'sl', 'tp3', 'Floating PnL']
+                st.dataframe(open_trades[cols_show].style.applymap(color_floating, subset=['Floating PnL']).format({'leverage': '{:.1f}x'}), use_container_width=True)
             else: st.info("No hay operaciones abiertas.")
             st.subheader("📜 Historial Cerrado")
             def color_pnl(val): return f'color: {"#228B22" if val > 0 else "#B22222" if val < 0 else "white"}'
-            if not closed_trades.empty: st.dataframe(closed_trades.style.applymap(color_pnl, subset=['pnl']), use_container_width=True)
+            if not closed_trades.empty: st.dataframe(closed_trades.style.applymap(color_pnl, subset=['pnl']).format({'leverage': '{:.1f}x'}), use_container_width=True)
         else: st.info("Historial vacío.")
 
 else: st.warning("Cargando datos...")
