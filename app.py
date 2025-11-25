@@ -15,7 +15,7 @@ import feedparser
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v15.5 Stability", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v15.6 Fixed", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -67,11 +67,11 @@ if not os.path.exists(CSV_FILE):
 
 if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 
-# CLAVE API (Directa para evitar errores de lectura)
+# CLAVE API DIRECTA
 COINGLASS_API_KEY = "1d4579f4c59149c6b6a1d83494a4f67c"
 
 # -----------------------------------------------------------------------------
-# 2. MOTOR DE DATOS (CON HEADERS ANTI-BLOQUEO)
+# 2. MOTOR DE DATOS
 # -----------------------------------------------------------------------------
 def load_trades():
     if not os.path.exists(CSV_FILE): return pd.DataFrame(columns=COLUMNS_DB)
@@ -107,25 +107,15 @@ def get_market_sessions():
 
 @st.cache_data(ttl=120)
 def get_deriv_data(symbol):
-    """
-    Obtiene Funding Rate y Open Interest usando Headers falsos para evitar bloqueos.
-    """
     base_coin = symbol.split('/')[0]
-    
-    # HEADERS MÁGICOS (Simulan ser un navegador Chrome)
-    headers_browser = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
+    headers_browser = {'User-Agent': 'Mozilla/5.0'}
     
     # 1. COINGLASS
     if COINGLASS_API_KEY:
         try:
             headers_cg = {"coinglassSecret": COINGLASS_API_KEY}
-            # OI
             url_oi = f"https://open-api.coinglass.com/public/v2/open_interest?symbol={base_coin}"
             r_oi = requests.get(url_oi, headers=headers_cg, timeout=3).json()
-            
-            # Funding
             url_fr = f"https://open-api.coinglass.com/public/v2/funding?symbol={base_coin}"
             r_fr = requests.get(url_fr, headers=headers_cg, timeout=3).json()
             
@@ -133,77 +123,50 @@ def get_deriv_data(symbol):
             avg_fr = 0.0
             
             if r_oi.get('success'):
-                for ex in r_oi['data']:
-                    total_oi += ex.get('openInterestAmount', 0) * ex.get('price', 0)
+                for ex in r_oi['data']: total_oi += ex.get('openInterestAmount', 0) * ex.get('price', 0)
             
             if r_fr.get('success'):
                 for ex in r_fr['data']:
                     if ex['exchangeName'] == 'Binance':
-                        if 'uMarginList' in ex and len(ex['uMarginList']) > 0:
-                            avg_fr = ex['uMarginList'][0]['rate']
+                        if 'uMarginList' in ex and len(ex['uMarginList']) > 0: avg_fr = ex['uMarginList'][0]['rate']
                         break
-            
             if total_oi > 0: return avg_fr, total_oi, "CoinGlass"
         except: pass
 
-    # 2. BYBIT V5 (Pública y robusta)
+    # 2. BYBIT
     try:
         url = f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_coin}USDT"
         r = requests.get(url, headers=headers_browser, timeout=3).json()
         if r['retCode'] == 0:
             info = r['result']['list'][0]
-            fr = float(info['fundingRate']) * 100
-            oi_val = float(info['openInterestValue'])
-            return fr, oi_val, "Bybit"
-    except: pass
-
-    # 3. DYDX
-    try:
-        dydx_symbol = f"{base_coin}-USD"
-        url = f"https://api.dydx.exchange/v3/markets/{dydx_symbol}"
-        r = requests.get(url, headers=headers_browser, timeout=3).json()
-        market = r['market']
-        fr = float(market['nextFundingRate']) * 100
-        oi = float(market['openInterest'])
-        return fr, oi, "dYdX"
+            return float(info['fundingRate']) * 100, float(info['openInterestValue']), "Bybit"
     except: pass
 
     return 0.0, 0.0, "Error"
 
 @st.cache_data(ttl=30)
 def get_mtf_trends_analysis(symbol):
-    """Analiza la tendencia en 15m, 1h y 4h"""
     ex = ccxt.binance()
     ticker_fix = symbol.replace("/", "USDT") if "/" not in symbol else symbol
     trends = {}
     score = 0
-    
     for tf in ['15m', '1h', '4h']:
         try:
             ohlcv = ex.fetch_ohlcv(ticker_fix, tf, limit=50)
             df = pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
             ema_fast = ta.ema(df['c'], length=20).iloc[-1]
             ema_slow = ta.ema(df['c'], length=50).iloc[-1]
-            
-            if ema_fast > ema_slow: 
-                trends[tf] = "BULL"
-                score += 1
-            else: 
-                trends[tf] = "BEAR"
-                score -= 1
-        except:
-            trends[tf] = "NEUTRO"
-            
+            if ema_fast > ema_slow: trends[tf] = "BULL"; score += 1
+            else: trends[tf] = "BEAR"; score -= 1
+        except: trends[tf] = "NEUTRO"
     return trends, score
 
 # -----------------------------------------------------------------------------
 # 3. INTERFAZ SIDEBAR
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v15.5")
-    # Estado del sistema
+    st.title("🦁 QUIMERA v15.6")
     st.markdown(f"<div style='font-size:12px; margin-bottom:10px;'><span class='status-dot-on'>●</span> SYSTEM ONLINE</div>", unsafe_allow_html=True)
-    
     get_market_sessions()
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT")
@@ -219,7 +182,7 @@ with st.sidebar:
     with st.expander("🌊 MOMENTO Y VOLUMEN"):
         use_rsi = st.checkbox("RSI & Stoch", True)
         use_obi = st.checkbox("Order Book Imbalance", True)
-        use_tsi = st.checkbox("TSI (True Strength)", True) # Nuevo
+        use_tsi = st.checkbox("TSI (True Strength)", True)
         
     with st.expander("💰 GESTIÓN DE RIESGO"):
         current_balance = get_current_balance()
@@ -241,27 +204,13 @@ def init_exchange():
     try:
         if "BINANCE_API_KEY" in st.secrets:
             ex = ccxt.binance({'apiKey': st.secrets["BINANCE_API_KEY"], 'secret': st.secrets["BINANCE_SECRET"], 'options': {'defaultType': 'spot'}})
-            ex.load_markets()
-            return ex, "Binance (Priv)"
+            ex.load_markets(); return ex, "Binance (Priv)"
     except: pass
-    
-    # Public Binance
     try:
-        ex = ccxt.binance()
-        ex.load_markets()
-        return ex, "Binance (Pub)"
-    except:
-        return ccxt.kraken(), "Kraken (Fallback)"
+        ex = ccxt.binance(); ex.load_markets(); return ex, "Binance (Pub)"
+    except: return ccxt.kraken(), "Kraken (Fallback)"
 
 exchange, source_name = init_exchange()
-
-@st.cache_data(ttl=3600) 
-def get_fear_and_greed():
-    try:
-        r = requests.get("https://api.alternative.me/fng/")
-        data = r.json()['data'][0]
-        return int(data['value']), data['value_classification']
-    except: return 50, "Neutral"
 
 @st.cache_data(ttl=300)
 def get_crypto_news():
@@ -315,25 +264,24 @@ def calculate_indicators(df):
     df = pd.concat([df, adx], axis=1)
     df['MFI'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
     
-    # TSI (True Strength Index) - Nuevo
     try:
         tsi = ta.tsi(df['close'], fast=13, slow=25)
         df = pd.concat([df, tsi], axis=1)
-        # Rename TSI column usually TSI_13_25_13
         tsi_col = [c for c in df.columns if 'TSI' in c][0]
         df['TSI'] = df[tsi_col]
     except: df['TSI'] = 0
     
-    high_w, low_w, close_w = df['high'].rolling(20).max(), df['low'].rolling(20).min(), df['close']
+    high_w = df['high'].rolling(20).max()
+    low_w = df['low'].rolling(20).min()
+    close_w = df['close']
     df['PIVOT'] = (high_w + low_w + close_w) / 3
     df['R1'], df['S1'] = (2 * df['PIVOT']) - low_w, (2 * df['PIVOT']) - high_w
     return df.fillna(method='bfill').fillna(method='ffill')
 
 # -----------------------------------------------------------------------------
-# 5. IA ANALISTA (MEJORADO CON GASOLINA/TSI)
+# 5. IA ANALISTA
 # -----------------------------------------------------------------------------
 def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open_interest, data_src):
-    # 1. CONTEXTO MULTI-TIMEFRAME
     t_15m = mtf_trends.get('15m', 'NEUTRO')
     t_1h = mtf_trends.get('1h', 'NEUTRO')
     t_4h = mtf_trends.get('4h', 'NEUTRO')
@@ -344,7 +292,6 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     elif t_4h == "BEAR" and t_15m == "BULL": context = "<span style='color:#FFFF00'>REBOTE TÉCNICO</span> (Macro Bajista / Micro Alcista)"
     else: context = "MERCADO MIXTO (Conflicto de Temporalidades)"
     
-    # 2. DATOS DERIVADOS
     deriv_txt = f"Funding Rate: <b style='color:#fff'>{fr:.4f}%</b>"
     if fr > 0.01: deriv_txt += " (Long Squeeze Risk)"
     elif fr < -0.01: deriv_txt += " (Short Squeeze Risk)"
@@ -356,19 +303,14 @@ def generate_detailed_ai_analysis_html(row, mtf_trends, mtf_score, obi, fr, open
     
     oi_txt = f"Interés Abierto: <b style='color:#44AAFF'>{oi_fmt}</b>"
 
-    # 3. MOMENTO & FUERZA (GASOLINA/TSI)
     mfi = row['MFI']
     adx = row['ADX_14']
     tsi = row['TSI']
-    
     gas_status = "LLENO (Alta Demanda)" if mfi > 60 else "RESERVA (Baja Demanda)" if mfi < 40 else "MEDIO"
     gas_color = "#00FF00" if mfi > 60 else "#FF4444" if mfi < 40 else "#FFF"
-    
     tsi_status = "ALCISTA" if tsi > 0 else "BAJISTA"
-    
     mom_txt = f"Gasolina (MFI): <b style='color:{gas_color}'>{gas_status}</b>. ADX: {adx:.1f}. TSI: {tsi_status} ({tsi:.2f})."
 
-    # 4. FLUJO (OBI)
     pressure = "COMPRADORA" if obi > 0.05 else "VENDEDORA" if obi < -0.05 else "NEUTRA"
     obi_color = "#00FF00" if obi > 0.05 else "#FF4444" if obi < -0.05 else "#aaa"
     obi_txt = f"Presión Libro: <b style='color:{obi_color}'>{pressure}</b> ({obi*100:.1f}%)"
@@ -410,7 +352,7 @@ def run_strategy(df, obi, trend_4h, filters):
         elif obi < -0.05: score -= 1; details.append("<span class='badge-bear'>OBI</span>")
         else: details.append("<span class='badge-neutral'>OBI</span>")
     
-    if filters.get('use_tsi', False): # TSI Logic
+    if filters.get('use_tsi', False): 
         max_score += 1
         if row['TSI'] > 0: score += 1; details.append("<span class='badge-bull'>TSI</span>")
         else: score -= 1; details.append("<span class='badge-bear'>TSI</span>")
@@ -420,14 +362,11 @@ def run_strategy(df, obi, trend_4h, filters):
     if score > threshold: signal = "LONG"
     elif score < -threshold: signal = "SHORT"
     
-    if filters['use_regime'] and row['ADX_14'] < 20: 
-        signal = "NEUTRO"; details.append("<span class='badge-neutral'>ADX-LOW</span>")
+    if filters['use_regime'] and row['ADX_14'] < 20: signal = "NEUTRO"
         
     if filters['use_rsi']:
-        if row['RSI'] > 70 and signal == "LONG": 
-            signal = "NEUTRO"; details.append("<span class='badge-neutral'>RSI-MAX</span>")
-        if row['RSI'] < 30 and signal == "SHORT": 
-            signal = "NEUTRO"; details.append("<span class='badge-neutral'>RSI-MIN</span>")
+        if row['RSI'] > 70 and signal == "LONG": signal = "NEUTRO"
+        if row['RSI'] < 30 and signal == "SHORT": signal = "NEUTRO"
 
     prob = 50.0
     if max_score > 0: prob = 50 + ((abs(score)/max_score)*45)
@@ -518,13 +457,11 @@ if df is not None:
     current_price, cur_high, cur_low = df['close'].iloc[-1], df['high'].iloc[-1], df['low'].iloc[-1]
     mfi_val, adx_val = df['MFI'].iloc[-1], df['ADX_14'].iloc[-1]
     
-    # DATOS FIX (Coinglass / Bybit / dYdX)
     fng_val, fng_label = get_fear_and_greed()
     news = get_crypto_news()
     fr, open_interest, data_src = get_deriv_data(symbol)
     mtf_trends, mtf_score = get_mtf_trends_analysis(symbol)
     
-    # IA (HTML Correcto + TSI)
     ai_html = generate_detailed_ai_analysis_html(df.iloc[-1], mtf_trends, mtf_score, obi, fr, open_interest, data_src)
     
     setup = None
@@ -607,22 +544,17 @@ if df is not None:
             fig_fng.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20), paper_bgcolor="rgba(0,0,0,0)", font={'color': "white"})
             st.plotly_chart(fig_fng, use_container_width=True)
 
-        # HTML IA
         st.markdown(ai_html, unsafe_allow_html=True)
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Precio", f"${current_price:,.2f}")
-        
-        # WIDGETS
         c2.metric("Funding Rate", f"{fr:.4f}%", delta_color="inverse")
         
-        # Formateo Open Interest
         if open_interest > 1000000000: oi_show = f"${open_interest/1000000000:.2f}B"
         elif open_interest > 1000000: oi_show = f"${open_interest/1000000:.2f}M"
         else: oi_show = f"${open_interest:,.0f}"
         c3.metric("Open Interest", oi_show)
         
-        # MTF
         with c4:
             cols = st.columns(3)
             colors = {"BULL": "🟢", "BEAR": "🔴", "NEUTRO": "⚪"}
@@ -708,7 +640,7 @@ if df is not None:
         fig.add_hline(y=70, row=2, col=1); fig.add_hline(y=30, row=2, col=1)
         
         # Actualizar titulo del grafico con la fuente
-        fig.update_layout(title=f"Chart Source: {source_name}", template="plotly_dark", height=500, margin=dict(l=0,r=0,t=30,b=0), xaxis_rangeslider_visible=False)
+        fig.update_layout(title=f"Chart Source: {source_name}", template="plotly_dark", height=500, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
