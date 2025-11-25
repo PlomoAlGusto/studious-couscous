@@ -14,7 +14,7 @@ import os
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN ESTRUCTURAL
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v6.2", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v6.3 Oracle", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -37,6 +37,16 @@ st.markdown("""
     .header-confirmed-long { color: #00FF00; font-size: 20px; font-weight: 900; border-bottom: 1px solid #333; padding-bottom: 10px; }
     .header-confirmed-short { color: #FF4444; font-size: 20px; font-weight: 900; border-bottom: 1px solid #333; padding-bottom: 10px; }
     .header-potential { color: #FFFF00; font-size: 18px; font-weight: bold; border-bottom: 1px dashed #555; padding-bottom: 10px; }
+    
+    /* Estilo para el nuevo Copilot */
+    .ai-box {
+        background-color: #223344;
+        border-left: 5px solid #44AAFF;
+        padding: 15px;
+        border-radius: 5px;
+        margin-bottom: 15px;
+        font-family: monospace;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -50,11 +60,11 @@ if 'last_alert' not in st.session_state: st.session_state.last_alert = "NEUTRO"
 if 'balance' not in st.session_state: st.session_state.balance = 10000.0
 
 # -----------------------------------------------------------------------------
-# 2. CAPA DE CONFIGURACIÓN (SIDEBAR MODULAR)
+# 2. CONFIGURACIÓN (SIDEBAR MODULAR)
 # -----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("🦁 QUIMERA v6.2")
-    st.caption("Always Ready Edition")
+    st.title("🦁 QUIMERA v6.3")
+    st.caption("Oracle Edition")
     
     symbol = st.text_input("Ticker", "BTC/USDT")
     tf = st.selectbox("Timeframe Principal", ["15m", "1h"], index=0)
@@ -147,12 +157,36 @@ def calculate_indicators(df):
     
     return df.fillna(method='bfill').fillna(method='ffill')
 
-def get_ai_advice(row, trend_4h, obi):
-    advice = []
-    if row['ADX_14'] < 20: advice.append("⚠️ Rango Lateral")
-    if trend_4h == "BULLISH": advice.append("✅ Tendencia 4H Alcista")
-    elif trend_4h == "BEARISH": advice.append("🔻 Tendencia 4H Bajista")
-    return " | ".join(advice)
+# --- NUEVO MOTOR DE ANÁLISIS DE IA ---
+def generate_ai_analysis(row, trend_4h, obi, signal, prob):
+    analysis = []
+    
+    # 1. Análisis de Estructura
+    if trend_4h == "BULLISH":
+        analysis.append("La estructura macro (4H) es ALCISTA, lo que favorece compras.")
+    elif trend_4h == "BEARISH":
+        analysis.append("La estructura macro (4H) es BAJISTA, presión vendedora dominante.")
+    
+    # 2. Análisis de Fuerza (ADX)
+    if row['ADX_14'] > 25:
+        analysis.append(f"El mercado tiene una tendencia fuerte (ADX {row['ADX_14']:.1f}), movimientos explosivos probables.")
+    else:
+        analysis.append(f"Mercado en rango o consolidación (ADX {row['ADX_14']:.1f}). Peligro de señales falsas.")
+        
+    # 3. Análisis de Libro de Órdenes
+    if obi > 0.1:
+        analysis.append("Detecto fuerte interés comprador en el Order Book.")
+    elif obi < -0.1:
+        analysis.append("Detecto muro de ventas en el Order Book.")
+        
+    # 4. Conclusión
+    if signal != "NEUTRO":
+        direction = "SUBIDA" if signal == "LONG" else "BAJADA"
+        analysis.append(f"🎯 CONCLUSIÓN: Alta probabilidad ({prob:.1f}%) de {direction}. El setup técnico está alineado.")
+    else:
+        analysis.append("⏳ CONCLUSIÓN: El mercado está indeciso o los filtros no confirman. Mejor esperar.")
+        
+    return " ".join(analysis)
 
 def run_strategy(df, obi, trend_4h, filters):
     row = df.iloc[-1]
@@ -305,21 +339,19 @@ if df is not None:
     
     signal, reasons, atr, prob = run_strategy(df, obi, trend_4h, filters)
     current_price = df['close'].iloc[-1]
-    advice = get_ai_advice(df.iloc[-1], trend_4h, obi)
     
-    # --- CÁLCULO DE SETUP (ALWAYS ON) ---
-    # Si la señal es NEUTRA, calculamos setup "Potencial" basado en Tendencia 4H
+    # NUEVO COPILOT NARRATIVO
+    ai_narrative = generate_ai_analysis(df.iloc[-1], trend_4h, obi, signal, prob)
+    
+    # --- CÁLCULO DE SETUP ---
     setup = None
-    setup_type = "POTENTIAL" # Por defecto potencial
     calc_dir = signal 
+    setup_type = "CONFIRMED" if signal != "NEUTRO" else "POTENTIAL"
     
     if signal == "NEUTRO":
-        # Usamos la tendencia 4H como guía para el setup potencial
         if trend_4h == "BULLISH": calc_dir = "LONG"
         elif trend_4h == "BEARISH": calc_dir = "SHORT"
         else: calc_dir = None
-    else:
-        setup_type = "CONFIRMED" # Señal confirmada
 
     if calc_dir:
         sl_dist = atr * 1.5
@@ -327,17 +359,31 @@ if df is not None:
         if calc_dir == "LONG":
             sl = current_price - sl_dist
             tp1, tp2, tp3 = current_price+risk, current_price+(risk*2), current_price+(risk*3.5)
-            emoji = "⬆️ LONG (COMPRA)"
+            emoji = "⬆️ COMPRA"
         else:
             sl = current_price + sl_dist
             tp1, tp2, tp3 = current_price-risk, current_price-(risk*2), current_price-(risk*3.5)
-            emoji = "⬇️ SHORT (VENTA)"
+            emoji = "⬇️ VENTA"
         
         setup = {'entry': current_price, 'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'dir': emoji, 'status': setup_type}
 
-    # Alertas (Solo si confirmado)
-    if signal != "NEUTRO" and signal != st.session_state.last_alert:
-        send_telegram_msg(f"🦁 v6.2: {signal} {symbol}\nMTF 4H: {trend_4h}\nProb: {prob:.1f}%")
+    # ALERTA TELEGRAM (RESTAURADA COMPLETA)
+    if signal != "NEUTRO" and signal != st.session_state.last_alert and setup:
+        msg = f"""🦁 *QUIMERA SIGNAL: {signal}*
+Activo: {symbol}
+Probabilidad: {prob:.1f}%
+
+🔥 *OPERACIÓN: {setup['dir']}*
+
+🔵 *ENTRADA:* ${current_price:.2f}
+
+🎯 *TP1:* ${setup['tp1']:.2f}
+🎯 *TP2:* ${setup['tp2']:.2f}
+🚀 *TP3:* ${setup['tp3']:.2f}
+
+🛑 *SL:* ${setup['sl']:.2f}
+"""
+        send_telegram_msg(msg)
         st.session_state.last_alert = signal
     elif signal == "NEUTRO": st.session_state.last_alert = "NEUTRO"
     
@@ -347,7 +393,8 @@ if df is not None:
     tab1, tab2 = st.tabs(["📊 LIVE COMMAND", "🧪 PAPER TRADING"])
     
     with tab1:
-        st.info(f"🤖 AI COPILOT: {advice}")
+        # CAJA IA EXTENDIDA
+        st.markdown(f"<div class='ai-box'>🤖 <b>QUIMERA COPILOT:</b><br>{ai_narrative}</div>", unsafe_allow_html=True)
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Precio", f"${current_price:,.2f}")
@@ -355,17 +402,15 @@ if df is not None:
         c3.metric("OBI", f"{obi:.1%}")
         c4.metric("Probabilidad", f"{prob:.1f}%")
 
-        # --- TARJETA DE SETUP (SIEMPRE VISIBLE SI HAY DIRECCIÓN) ---
         if setup:
-            # Definir estilos según si es Confirmado o Potencial
             if setup['status'] == "CONFIRMED":
                 header_cls = "header-confirmed-long" if calc_dir == "LONG" else "header-confirmed-short"
-                header_txt = f"🔥 OPERACIÓN CONFIRMADA: {setup['dir']}"
+                header_txt = f"🔥 CONFIRMADO: {setup['dir']}"
                 btn_label = f"🚀 EJECUTAR {calc_dir}"
             else:
                 header_cls = "header-potential"
-                header_txt = f"⚠️ SETUP POTENCIAL (Esperando confirmación): {setup['dir']}"
-                btn_label = f"⚠️ FORZAR ENTRADA {calc_dir}"
+                header_txt = f"⚠️ SETUP POTENCIAL: {setup['dir']}"
+                btn_label = f"⚠️ FORZAR ENTRADA"
 
             st.markdown(f"""
             <div class="trade-setup">
@@ -384,9 +429,8 @@ if df is not None:
                 execute_trade(calc_dir, current_price, setup['sl'], setup['tp1'], setup['tp2'], setup['tp3'], 100, atr)
                 st.success(f"Orden {calc_dir} lanzada al mercado.")
         else:
-            st.info("Mercado sin dirección clara (4H Neutro). Esperando estructura.")
+            st.info("Esperando estructura de mercado clara...")
 
-        # GRÁFICO
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
         fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
         if use_vwap: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
