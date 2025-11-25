@@ -26,24 +26,26 @@ st.markdown("""
 # 2. CONEXIÓN SEGURA Y TELEGRAM
 # -----------------------------------------------------------------------------
 def init_exchange():
-    """Inicializa la conexión con Binance Testnet usando Secrets"""
+    """Inicializa la conexión con Binance Testnet (SPOT)"""
     try:
-        # Intentamos leer las claves de la configuración
         if "BINANCE_API_KEY" in st.secrets:
             exchange = ccxt.binance({
                 'apiKey': st.secrets["BINANCE_API_KEY"],
                 'secret': st.secrets["BINANCE_SECRET"],
                 'enableRateLimit': True,
-                'options': {'defaultType': 'future'} 
+                'options': {
+                    'defaultType': 'spot',  # <--- AQUÍ ESTABA EL PROBLEMA (Antes ponía 'future')
+                    'adjustForTimeDifference': True
+                }
             })
-            exchange.set_sandbox_mode(True) # MODO PRUEBA ACTIVADO
+            exchange.set_sandbox_mode(True) # Modo Testnet
             return exchange
         else:
             return None
     except Exception as e:
         st.error(f"Error conectando a Binance: {e}")
         return None
-
+        
 def send_telegram_msg(msg):
     """Envía mensajes a Telegram"""
     token = st.secrets.get("TELEGRAM_TOKEN", "")
