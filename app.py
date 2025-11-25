@@ -14,7 +14,7 @@ import os
 # -----------------------------------------------------------------------------
 # 1. CONFIGURACIÓN
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Quimera Pro v7.1 Analytics", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Quimera Pro v7.1.1 Fixed", layout="wide", page_icon="🦁")
 
 st.markdown("""
 <style>
@@ -39,7 +39,7 @@ HUNTER_ASSETS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'PAXG/USDT', 'X
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.title("🦁 QUIMERA v7.1")
-    st.caption("Analytics Edition 📊")
+    st.caption("Analytics Fixed 🔧")
     
     st.header("🔫 HUNTER AUTO")
     hunter_active = st.toggle("ACTIVAR CAZA", False)
@@ -118,9 +118,9 @@ def run_strategy_check(df, obi, trend_4h):
     return signal, row['ATR']
 
 # -----------------------------------------------------------------------------
-# 4. ANALYTICS & CHARTS (NUEVO)
+# 4. ANALYTICS & CHARTS (CORREGIDO: AÑADIDO KEY ÚNICA)
 # -----------------------------------------------------------------------------
-def render_analytics(df_trades):
+def render_analytics(df_trades, unique_key):
     if df_trades.empty:
         st.info("No hay datos suficientes para generar analíticas.")
         return
@@ -130,19 +130,15 @@ def render_analytics(df_trades):
         st.info("Aún no has cerrado ninguna operación.")
         return
 
-    # 1. CÁLCULO DE LA CURVA DE EQUIDAD
-    # Empezamos con 10,000 y vamos sumando/restando el PnL acumulado
+    # 1. CÁLCULO CURVA
     closed['cumulative_pnl'] = closed['pnl'].cumsum()
     closed['equity'] = 10000 + closed['cumulative_pnl']
-    
-    # Añadimos el punto inicial (Día 0 = $10,000)
     start_point = pd.DataFrame([{'time': 'Inicio', 'equity': 10000}])
     equity_curve = pd.concat([start_point, closed[['time', 'equity']]])
 
     # 2. KPIs
     total_trades = len(closed)
     wins = len(closed[closed['pnl'] > 0])
-    losses = len(closed[closed['pnl'] <= 0])
     win_rate = (wins / total_trades) * 100
     best_trade = closed['pnl'].max()
     worst_trade = closed['pnl'].min()
@@ -155,11 +151,11 @@ def render_analytics(df_trades):
     k3.metric("Mejor Trade", f"${best_trade:,.2f}")
     k4.metric("Peor Trade", f"${worst_trade:,.2f}")
 
-    # GRÁFICO DE ÁREA (EQUITY CURVE)
-    fig = px.area(equity_curve, x='time', y='equity', title='Curva de Capital (Equity Curve)')
+    # GRÁFICO CON KEY ÚNICA PARA EVITAR ERROR
+    fig = px.area(equity_curve, x='time', y='equity', title='Curva de Capital')
     fig.update_layout(template="plotly_dark", height=350)
     fig.update_traces(line_color='#00FF00' if total_profit > 0 else '#FF4444')
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=unique_key)
 
 # -----------------------------------------------------------------------------
 # 5. GESTIÓN AUTOMÁTICA
@@ -291,9 +287,9 @@ with tab1:
 with tab2:
     df_trades = load_trades()
     
-    # --- AQUÍ ESTÁ LA MAGIA DE LAS ANALÍTICAS ---
-    st.subheader("📈 Rendimiento de la Cuenta")
-    render_analytics(df_trades) # LLAMADA A LA FUNCIÓN DE GRÁFICOS
+    st.subheader("📈 Rendimiento")
+    # AQUÍ ESTABA EL ERROR: Pasamos una key única 'analytics_tab'
+    render_analytics(df_trades, unique_key="analytics_tab") 
     
     st.divider()
     st.subheader("Operaciones Abiertas")
@@ -306,10 +302,10 @@ with tab3:
     logs_txt = "\n".join(st.session_state.hunter_logs)
     st.text_area("Terminal:", value=logs_txt, height=300, disabled=True)
     
-    # También mostramos el gráfico de rendimiento aquí para el modo Hunter
     st.divider()
     st.subheader("Evolución del Cazador")
-    render_analytics(df_trades)
+    # AQUÍ PASAMOS OTRA KEY DIFERENTE 'hunter_tab'
+    render_analytics(df_trades, unique_key="hunter_tab")
 
 if auto_refresh or hunter_active:
     time.sleep(60)
