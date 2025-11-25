@@ -6,3 +6,4 @@ plotly
 prophet
 requests
 numpy
+feedparser  
