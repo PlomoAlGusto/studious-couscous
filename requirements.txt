@@ -3,5 +3,9 @@ ccxt
 pandas
 pandas_ta
 plotly
-prophet
 requests
+numpy
+feedparser
+scikit-learn
+nltk
+streamlit-autorefresh
