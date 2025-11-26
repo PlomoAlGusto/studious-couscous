@@ -1,4 +1,6 @@
 import streamlit as st
+import subprocess
+import sys
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -21,25 +23,27 @@ init_nltk()
 db_mgr = TradeManager()
 data_mgr = DataManager()
 
+# --- CONTROL DE ESTADO PARA ALERTAS ---
+if 'last_alert' not in st.session_state:
+    st.session_state.last_alert = "NEUTRO"
+
 # --- MOTOR DE CÁLCULO HÍBRIDO (SOLUCIÓN AL ERROR) ---
-# Si pandas_ta falla, usamos matemáticas puras con Pandas.
 try:
     import pandas_ta as ta
     HAS_TA = True
 except ImportError:
     HAS_TA = False
-    # No mostramos error, simplemente cambiamos al modo manual silenciosamente
 
 def calculate_indicators_manual(df):
     """Cálculo manual de indicadores si falla la librería externa"""
     if df is None: return None
     df = df.copy()
     
-    # 1. EMA 20 & 50
+    # EMA
     df['EMA_20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['EMA_50'] = df['close'].ewm(span=50, adjust=False).mean()
     
-    # 2. RSI 14
+    # RSI
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -47,7 +51,7 @@ def calculate_indicators_manual(df):
     df['RSI'] = 100 - (100 / (1 + rs))
     df['RSI'] = df['RSI'].fillna(50)
     
-    # 3. ATR 14
+    # ATR
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
     low_close = np.abs(df['low'] - df['close'].shift())
@@ -55,31 +59,27 @@ def calculate_indicators_manual(df):
     true_range = np.max(ranges, axis=1)
     df['ATR'] = true_range.rolling(14).mean()
     
-    # 4. VWAP
+    # VWAP
     if 'volume' in df.columns:
         v = df['volume'].values
         tp = (df['high'] + df['low'] + df['close']) / 3
-        # VWAP simplificado (rolling o acumulado sesión)
         df['VWAP'] = (tp * v).cumsum() / v.cumsum()
     else:
         df['VWAP'] = df['EMA_50']
 
-    # 5. ADX y MFI (Simulados o simplificados para no romper)
-    df['ADX_14'] = 25 # Valor neutro por defecto en modo manual
-    df['MFI'] = 50    # Valor neutro por defecto en modo manual
+    df['ADX_14'] = 25 
+    df['MFI'] = 50    
     
     return df.fillna(method='bfill').fillna(method='ffill')
 
 def process_data(df):
     if HAS_TA:
         try:
-            # Intento con librería
             df['EMA_20'] = ta.ema(df['close'], length=20)
             df['EMA_50'] = ta.ema(df['close'], length=50)
             df['RSI'] = ta.rsi(df['close'], length=14)
             df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
             
-            # VWAP
             try: 
                 if 'volume' in df.columns: 
                     df.ta.vwap(append=True)
@@ -87,7 +87,6 @@ def process_data(df):
             except: pass
             if 'VWAP' not in df.columns: df['VWAP'] = df['EMA_50']
 
-            # ADX / MFI
             try:
                 adx = ta.adx(df['high'], df['low'], df['close'], length=14)
                 if adx is not None: df = pd.concat([df, adx], axis=1)
@@ -100,6 +99,26 @@ def process_data(df):
             return calculate_indicators_manual(df)
     else:
         return calculate_indicators_manual(df)
+
+# --- FUNCIÓN TELEGRAM ---
+def send_telegram_msg(msg):
+    """Envía alertas a Telegram usando secrets"""
+    try:
+        token = st.secrets.get("TELEGRAM_TOKEN")
+        chat_id = st.secrets.get("TELEGRAM_CHAT_ID")
+        
+        if token and chat_id:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            params = {
+                "chat_id": chat_id, 
+                "text": msg, 
+                "parse_mode": "Markdown"
+            }
+            requests.get(url, params=params, timeout=5)
+        else:
+            print("⚠️ Telegram no configurado en .streamlit/secrets.toml")
+    except Exception as e:
+        print(f"Error enviando Telegram: {e}")
 
 # --- CSS EXACTO (DISEÑO VISUAL DEL TXT) ---
 st.markdown("""
@@ -187,7 +206,7 @@ def get_signal_logic(df, filters, fr):
     if max_score > 0: prob = 50 + ((abs(score)/max_score) * 45)
     if fr and abs(fr) < 0.01: prob += 2
     
-    # --- DIRECCIÓN POTENCIAL (CLAVE DEL DISEÑO) ---
+    # --- DIRECCIÓN POTENCIAL ---
     calc_dir = signal
     if signal == "NEUTRO":
         if row['close'] > row['EMA_50']: calc_dir = "LONG"
@@ -222,8 +241,12 @@ def main():
                 'use_rsi': st.checkbox("RSI Limit", True)
             }
         
+        auto_refresh = st.checkbox("🔄 AUTO-SCAN (60s)", False)
         if st.button("🔥 RESETEAR CUENTA"):
             db_mgr.reset_account(); st.rerun()
+
+    if auto_refresh:
+        st.markdown("""<meta http-equiv="refresh" content="60">""", unsafe_allow_html=True)
 
     # --- PROCESAMIENTO ---
     with st.spinner("Analizando..."):
@@ -240,6 +263,20 @@ def main():
         signal, calc_dir, prob, details, veto = get_signal_logic(df, filters, fr)
         current_price = df['close'].iloc[-1]
         atr = df['ATR'].iloc[-1]
+
+    # --- SISTEMA DE ALERTAS TELEGRAM ---
+    if signal != "NEUTRO" and signal != st.session_state.last_alert:
+        msg = f"""🚀 *SEÑAL CONFIRMADA QUIMERA*
+        
+📉 *Activo:* {symbol}
+⚡ *Dirección:* {signal}
+🎯 *Precio:* ${current_price:,.2f}
+📊 *Probabilidad:* {prob:.1f}%
+        """
+        send_telegram_msg(msg)
+        st.session_state.last_alert = signal
+    elif signal == "NEUTRO":
+        st.session_state.last_alert = "NEUTRO"
 
     # --- UI DASHBOARD ---
     tab1, tab2 = st.tabs(["📊 LIVE COMMAND", "📜 HISTORIAL"])
@@ -349,6 +386,10 @@ def main():
                     "candles_held": 0, "atr_entry": atr
                 }
                 db_mgr.add_trade(trade)
+                
+                # Enviar Telegram al ejecutar manualmente
+                send_telegram_msg(f"⚠️ *ORDEN MANUAL ENVIADA*: {calc_dir} en {symbol} @ ${current_price:,.2f}")
+                
                 st.success(f"Orden {calc_dir} enviada.")
 
     with tab2:
