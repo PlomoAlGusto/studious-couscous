@@ -4,7 +4,8 @@ pandas
 pandas_ta
 plotly
 requests
-feedparser
 numpy
+feedparser
 scikit-learn
 nltk
+streamlit-autorefresh
