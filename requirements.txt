@@ -10,3 +10,4 @@ scikit-learn
 nltk
 streamlit-autorefresh
 yfinance
+textwrap
