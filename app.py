@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import textwrap # <--- LA CLAVE PARA ARREGLAR EL HTML
 from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timezone
@@ -13,25 +14,24 @@ try:
     from strategy import StrategyManager
     from utils import setup_logging, init_nltk, send_telegram_alert
 except ImportError as e:
-    st.error(f"Error: {e}")
+    st.error(f"Error crítico: {e}")
     st.stop()
 
 st.set_page_config(page_title="Quimera Pro", layout="wide", page_icon="🦁")
 setup_logging()
 init_nltk()
 
-# --- CSS FUERTE (ESTILO MILITAR/NEÓN) ---
+# --- CSS FUERTE ---
 st.markdown("""
 <style>
-    /* RESET BÁSICO */
     .stApp { background-color: #0e1117; }
-
-    /* TAGS CABECERA */
+    
+    /* TAGS */
     .source-tag { background-color: #21262d; color: #8b949e; padding: 4px 8px; border-radius: 4px; font-size: 12px; border: 1px solid #30363d; font-family: monospace; }
     .symbol-tag { background-color: #1f6feb; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; font-family: monospace; }
 
-    /* TARJETA DE TRADE (CONTENEDOR PRINCIPAL) */
-    .trade-card-box {
+    /* TRADE CARD */
+    div.trade-card-box {
         background-color: #0d1117 !important;
         border: 1px solid #30363d !important;
         border-radius: 10px !important;
@@ -41,55 +41,35 @@ st.markdown("""
         box-shadow: 0 8px 24px rgba(0,0,0,0.6) !important;
     }
 
-    /* BARRA DE PROBABILIDAD */
-    .prob-container {
-        width: 100% !important;
-        height: 10px !important;
-        background-color: #21262d !important;
-        border-radius: 5px !important;
-        margin: 15px 0 25px 0 !important;
-        overflow: hidden !important;
+    /* BARRA PROBABILIDAD */
+    .prob-track {
+        width: 100%; height: 10px; background-color: #21262d;
+        border-radius: 5px; margin: 10px 0 20px 0; overflow: hidden;
     }
     
-    /* GRID DE PRECIOS (3 Columnas) */
-    .price-grid-row {
-        display: flex !important;
-        justify-content: space-between !important;
-        margin-bottom: 15px !important;
-        gap: 10px !important;
-    }
-    
-    .price-col {
-        flex: 1 !important;
-        text-align: center !important;
-    }
+    /* GRID PRECIOS */
+    .price-grid-row { display: flex; justify-content: space-between; margin-bottom: 15px; gap: 10px; }
+    .price-col { flex: 1; text-align: center; }
     
     .price-box-dark {
-        background-color: #161b22 !important;
-        border: 1px solid #30363d !important;
-        border-radius: 6px !important;
-        padding: 10px !important;
-        text-align: center !important;
-        flex: 1 !important;
+        background-color: #161b22; border: 1px solid #30363d;
+        border-radius: 6px; padding: 10px; text-align: center; flex: 1;
     }
 
-    /* TYPOGRAPHY */
-    .t-label { font-size: 11px !important; color: #8b949e !important; text-transform: uppercase !important; letter-spacing: 1px !important; margin-bottom: 5px !important; }
-    .t-val { font-family: 'Consolas', monospace !important; font-size: 17px !important; font-weight: bold !important; }
+    /* TEXTOS */
+    .t-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+    .t-val { font-family: 'Consolas', monospace; font-size: 17px; font-weight: bold; }
     
-    /* COLORES FLÚOR */
-    .c-blue { color: #58a6ff !important; text-shadow: 0 0 10px rgba(88, 166, 255, 0.3); }
-    .c-red { color: #f85149 !important; text-shadow: 0 0 10px rgba(248, 81, 73, 0.3); }
-    .c-green { color: #3fb950 !important; text-shadow: 0 0 10px rgba(63, 185, 80, 0.3); }
+    .c-blue { color: #58a6ff !important; }
+    .c-red { color: #f85149 !important; }
+    .c-green { color: #3fb950 !important; }
     .c-white { color: #f0f6fc !important; }
-    .c-gold { color: #d29922 !important; }
 
     /* NOTICIAS */
-    .news-container { background-color: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px; }
-    .news-row { padding: 8px 0; border-bottom: 1px solid #21262d; font-size: 13px; }
+    .news-container { background-color: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 15px; }
+    .news-row { padding: 8px 0; border-bottom: 1px solid #21262d; font-size: 12px; }
     .news-link { color: #c9d1d9; text-decoration: none; }
     .news-link:hover { color: #58a6ff; }
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -112,7 +92,7 @@ def calculate_optimal_leverage(entry, sl):
     safe_lev = int(0.02 / dist_pct)
     return max(1, min(safe_lev, 50))
 
-# --- RENDERIZADO HTML LIMPIO ---
+# --- GENERADORES HTML (SOLUCIÓN DEL ERROR) ---
 def render_trade_card(type, signal_strength, price, sl, tp1, tp2, tp3, lev, prob):
     if signal_strength == "DIAMOND":
         header = f"💎 SEÑAL DIAMANTE: {type}"
@@ -123,6 +103,7 @@ def render_trade_card(type, signal_strength, price, sl, tp1, tp2, tp3, lev, prob
         h_color = "#d29922"
         bar_color = "#d29922"
 
+    # USAMOS DEDENT PARA QUITAR ESPACIOS Y QUE NO SALGA COMO CODIGO
     html = f"""
     <div class="trade-card-box">
         <div style="text-align:center; font-size:20px; font-weight:bold; color:{h_color}; margin-bottom:5px; letter-spacing:1px; text-transform:uppercase;">
@@ -134,8 +115,8 @@ def render_trade_card(type, signal_strength, price, sl, tp1, tp2, tp3, lev, prob
             <span style="color:{bar_color}; font-weight:bold;">{prob}%</span>
         </div>
         
-        <div class="prob-container">
-            <div style="width:{prob}%; height:100%; background-color:{bar_color}; border-radius:5px; box-shadow: 0 0 15px {bar_color};"></div>
+        <div class="prob-track">
+            <div style="width:{prob}%; height:100%; background-color:{bar_color}; box-shadow: 0 0 15px {bar_color};"></div>
         </div>
 
         <div class="price-grid-row">
@@ -169,10 +150,11 @@ def render_trade_card(type, signal_strength, price, sl, tp1, tp2, tp3, lev, prob
         </div>
     </div>
     """
-    return html
+    return textwrap.dedent(html)
 
 def render_quimera_ai(regime, atr, fr, fng, rsi, trend_strength):
     c_reg = "#3fb950" if "TENDENCIA" in regime else "#d29922"
+    
     html = f"""
     <div style="margin-bottom:10px; font-weight:bold; color:#a371f7; display:flex; align-items:center; gap:5px; font-size:14px;">
         <span>🧠 QUIMERA AI ANALYSIS</span>
@@ -198,7 +180,7 @@ def render_quimera_ai(regime, atr, fr, fng, rsi, trend_strength):
         </div>
     </div>
     """
-    return html
+    return textwrap.dedent(html)
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -285,7 +267,7 @@ def main():
         fig.update_layout(template="plotly_dark", height=500, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- TARJETA DE TRADE (Setup) ---
+        # --- TRADE CARD ---
         sl_dist = atr * 1.5
         sl = price - sl_dist if display_signal == "LONG" else price + sl_dist
         tp1 = price + sl_dist if display_signal == "LONG" else price - sl_dist
