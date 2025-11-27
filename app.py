@@ -1,13 +1,12 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 import textwrap
 from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timezone
 
-# --- IMPORTACIONES ---
+# --- IMPORTACIONES DE MÓDULOS ---
 try:
     from config import config
     from database import TradeManager
@@ -15,56 +14,75 @@ try:
     from strategy import StrategyManager
     from utils import setup_logging, init_nltk, send_telegram_alert
 except ImportError as e:
-    st.error(f"Error crítico: {e}")
+    st.error(f"Error crítico importando módulos: {e}")
     st.stop()
 
+# --- 1. CONFIGURACIÓN INICIAL ---
 st.set_page_config(page_title="Quimera Pro", layout="wide", page_icon="🦁")
 setup_logging()
 init_nltk()
 
-# --- CSS ---
+# --- 2. ESTILOS CSS BLINDADOS (Visuales Pro) ---
 st.markdown("""
 <style>
+    /* General */
     .stApp { background-color: #0e1117; }
     
-    /* TABS SUPERIORES */
-    .stTabs [data-baseweb="tab-list"] { gap: 20px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #161b22; border-radius: 5px; color: #8b949e; }
-    .stTabs [aria-selected="true"] { background-color: #238636; color: white; font-weight: bold; }
-
-    /* TAGS */
+    /* TAGS DE CABECERA */
     .source-tag { background-color: #21262d; color: #8b949e; padding: 4px 8px; border-radius: 4px; font-size: 11px; border: 1px solid #30363d; font-family: monospace; }
     .symbol-tag { background-color: #1f6feb; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; font-family: monospace; }
 
-    /* TARJETA DE TRADE */
-    div.trade-card-box { background-color: #0d1117 !important; border: 1px solid #30363d !important; border-radius: 10px !important; padding: 25px !important; margin-bottom: 20px !important; box-shadow: 0 8px 24px rgba(0,0,0,0.6) !important; }
+    /* TARJETA DE TRADE (CONTENEDOR) */
+    div.trade-card-box {
+        background-color: #0d1117 !important;
+        border: 1px solid #30363d !important;
+        border-radius: 10px !important;
+        padding: 25px !important;
+        margin-top: 15px !important;
+        margin-bottom: 20px !important;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.6) !important;
+    }
 
-    .prob-track { width: 100%; height: 10px; background-color: #21262d; border-radius: 5px; margin: 10px 0 20px 0; overflow: hidden; }
+    /* BARRA DE PROBABILIDAD */
+    .prob-track {
+        width: 100%; height: 10px; background-color: #21262d;
+        border-radius: 5px; margin: 10px 0 20px 0; overflow: hidden;
+    }
+    
+    /* GRID DE PRECIOS */
     .price-grid-row { display: flex; justify-content: space-between; margin-bottom: 15px; gap: 10px; }
     .price-col { flex: 1; text-align: center; }
-    .price-box-dark { background-color: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px; text-align: center; flex: 1; }
+    
+    .price-box-dark {
+        background-color: #161b22; border: 1px solid #30363d;
+        border-radius: 6px; padding: 10px; text-align: center; flex: 1;
+    }
 
+    /* TEXTOS Y COLORES */
     .t-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
     .t-val { font-family: 'Consolas', monospace; font-size: 17px; font-weight: bold; }
-    .c-blue { color: #58a6ff !important; } .c-red { color: #f85149 !important; } .c-green { color: #3fb950 !important; } .c-white { color: #f0f6fc !important; }
+    
+    .c-blue { color: #58a6ff !important; }
+    .c-red { color: #f85149 !important; }
+    .c-green { color: #3fb950 !important; }
+    .c-white { color: #f0f6fc !important; }
 
-    /* NOTICIAS */
+    /* CAJA DE NOTICIAS */
     .news-container { background-color: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 15px; }
     .news-row { padding: 8px 0; border-bottom: 1px solid #21262d; font-size: 12px; }
-    .news-link { color: #c9d1d9; text-decoration: none; } .news-link:hover { color: #58a6ff; }
+    .news-link { color: #c9d1d9; text-decoration: none; }
+    .news-link:hover { color: #58a6ff; }
     
-    /* IA BOX */
+    /* CAJA IA */
     .ai-box-container { background-color:#161b22; border-top:3px solid #a371f7; padding:15px; border-radius:0 0 6px 6px; margin-bottom:20px; }
     .ai-row-item { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #30363d; }
 
-    /* METRICAS PAPER TRADING */
+    /* PNL PAPER TRADING */
     .paper-metric { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 8px; text-align: center; }
-    .pnl-pos { color: #3fb950; font-weight: bold; font-size: 24px; }
-    .pnl-neg { color: #f85149; font-weight: bold; font-size: 24px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNCIONES VISUALES ---
+# --- 3. FUNCIONES VISUALES ---
 def display_market_sessions():
     now = datetime.now(timezone.utc)
     hour = now.hour
@@ -72,8 +90,9 @@ def display_market_sessions():
     st.sidebar.markdown("### 🌍 SESIONES (UTC)")
     for name, (start, end) in sessions.items():
         is_open = start <= hour < end if start < end else (hour >= start or hour < end)
+        status = "🟢" if is_open else "🔴"
         bg = "rgba(50,255,50,0.1)" if is_open else "rgba(255,255,255,0.05)"
-        st.sidebar.markdown(f"<div style='font-size:11px; padding:5px; margin-bottom:5px; background:{bg}; border-radius:4px; display:flex; justify-content:space-between;'><span>{name}</span><span>{'🟢' if is_open else '🔴'}</span></div>", unsafe_allow_html=True)
+        st.sidebar.markdown(f"<div style='font-size:11px; padding:5px; margin-bottom:5px; background:{bg}; border-radius:4px; display:flex; justify-content:space-between;'><span>{name}</span><span>{status}</span></div>", unsafe_allow_html=True)
 
 def calculate_optimal_leverage(entry, sl):
     if entry == 0: return 1
@@ -139,7 +158,7 @@ def render_news_box(news):
 """
     return textwrap.dedent(html)
 
-# --- SIDEBAR ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
     st.title("🦁 QUIMERA PRO")
     display_market_sessions()
@@ -147,7 +166,30 @@ with st.sidebar:
     symbol = st.text_input("Ticker", "BTC/USDT").upper()
     timeframe = st.selectbox("Timeframe", ["15m", "1h", "4h", "1d"])
     
-    with st.expander("⚙️ FILTROS", expanded=True):
+    # ESCÁNER MULTI-TICKER
+    with st.expander("📡 RADAR MULTI-TICKER", expanded=False):
+        if st.button("ESCANEAR TOP 5"):
+            scan_list = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT"]
+            data_mgr_scan = DataManager()
+            strat_mgr_scan = StrategyManager()
+            st.markdown("---")
+            for s in scan_list:
+                # Nota: Yahoo finance mapping
+                y_s = s.replace("/", "-").replace("USDT", "USD")
+                if "USD" not in y_s: y_s += "-USD"
+                
+                # Usamos una instancia temporal
+                # Ojo: fetch_market_data usa 'symbol' y lo convierte internamente.
+                df_scan = data_mgr_scan.fetch_market_data(s, timeframe, limit=60)
+                
+                if df_scan is not None:
+                    df_scan = strat_mgr_scan.prepare_data(df_scan)
+                    sig, _, _, reg, _, _ = strat_mgr_scan.get_signal(df_scan, {'use_ema':True})
+                    icon = "💎" if sig != "NEUTRO" else "💤"
+                    color = "green" if sig=="LONG" else "red" if sig=="SHORT" else "grey"
+                    st.markdown(f"**{s}:** :{color}[{sig}] {icon}")
+
+    with st.expander("⚙️ FILTROS ESTRATEGIA", expanded=True):
         filters = {
             'use_ema': st.checkbox("Tendencia EMA", True),
             'use_vwap': st.checkbox("Filtro VWAP", True),
@@ -156,10 +198,13 @@ with st.sidebar:
     
     auto_trade_on = st.toggle("🤖 AUTO-TRADE (Diamante)", value=False)
     if auto_trade_on:
-        st.caption("⚠️ Operará automáticamente si encuentra señal Diamante.")
+        st.caption("⚠️ El bot ejecutará operaciones Diamante automáticamente.")
 
     auto_refresh = st.checkbox("🔄 AUTO-SCAN (60s)", False)
-    if st.button("🗑️ RESET"): TradeManager().reset_account(); st.rerun()
+    
+    if st.button("🗑️ RESET"): 
+        TradeManager().reset_account()
+        st.rerun()
 
     st.markdown("---")
     if config.TELEGRAM_TOKEN:
@@ -169,7 +214,7 @@ with st.sidebar:
 
 if auto_refresh: st_autorefresh(interval=60000)
 
-# --- MAIN ---
+# --- 5. LÓGICA PRINCIPAL ---
 def main():
     data_mgr = DataManager()
     strat_mgr = StrategyManager()
@@ -182,39 +227,47 @@ def main():
         fng_val, fng_class = data_mgr.fetch_fear_greed()
 
     if df is None: st.error("❌ Error de datos."); return
+    
+    # Monitor de Cierre Automático (Revisión cada ciclo)
+    current_price = df['close'].iloc[-1]
+    closed_trades = db_mgr.check_sl_tp(current_price, symbol)
+    for c in closed_trades:
+        st.toast(f"💰 CIERRE AUTO: {c['reason']} (PnL: ${c['pnl']:.2f})", icon="🔔")
+        send_telegram_alert(symbol, f"CIERRE: {c['reason']}", current_price, 0, 0, c['leverage'])
 
+    # Cálculos Estrategia
     df = strat_mgr.prepare_data(df)
     strat_mgr.train_regime_model(df)
-    signal_raw, atr, details, regime, trend_status = strat_mgr.get_signal(df, filters)
-    price = df['close'].iloc[-1]
+    signal_raw, atr, details, regime, trend_status, candle_pat = strat_mgr.get_signal(df, filters)
     
-    # PESTAÑAS PRINCIPALES
-    tab_analysis, tab_paper = st.tabs(["🦁 ANÁLISIS & SEÑALES", "💼 PAPER TRADING"])
+    # Determinar Señal
+    display_signal = signal_raw
+    signal_strength = "WEAK"
+    if signal_raw == "NEUTRO":
+        last = df.iloc[-1]
+        if last.get('EMA_20', 0) > last.get('EMA_50', 0): display_signal = "LONG"; signal_strength = "POTENTIAL"
+        else: display_signal = "SHORT"; signal_strength = "POTENTIAL"
+    else:
+        signal_strength = "DIAMOND"
 
-    # --- PESTAÑA 1: ANÁLISIS ---
-    with tab_analysis:
-        display_signal = signal_raw
-        signal_strength = "WEAK"
-        if signal_raw == "NEUTRO":
-            last = df.iloc[-1]
-            if last.get('EMA_20', 0) > last.get('EMA_50', 0): display_signal = "LONG"; signal_strength = "POTENTIAL"
-            else: display_signal = "SHORT"; signal_strength = "POTENTIAL"
-        else:
-            signal_strength = "DIAMOND"
+    prob = 85 if signal_strength == "DIAMOND" else 60
+    if regime == "TENDENCIA": prob += 5
 
-        prob = 85 if signal_strength == "DIAMOND" else 60
-        if regime == "TENDENCIA": prob += 5
+    # Auto-Trading
+    if auto_trade_on:
+        executed, msg = strat_mgr.check_and_execute_auto(db_mgr, symbol, display_signal, signal_strength, current_price, atr)
+        if executed: st.toast(f"🤖 Auto-Trade Ejecutado: {display_signal}", icon="🦁")
 
-        # Auto-Trade
-        if auto_trade_on:
-            executed, msg = strat_mgr.check_and_execute_auto(db_mgr, symbol, display_signal, signal_strength, price, atr)
-            if executed: st.toast(f"🤖 Auto-Trade: {display_signal}", icon="🦁")
+    # --- TABS PRINCIPALES ---
+    tab1, tab2, tab3 = st.tabs(["🦁 ANÁLISIS", "💼 CARTERA", "🧪 BACKTEST"])
 
+    # PESTAÑA 1: ANÁLISIS
+    with tab1:
         col1, col2 = st.columns([2.5, 1])
         with col1:
             st.markdown(f"""<div style='display:flex; gap:10px; margin-bottom:15px;'><span class='symbol-tag'>{symbol}</span><span class='source-tag'>📡 YAHOO</span><span class='source-tag'>⏱️ {timeframe}</span></div>""", unsafe_allow_html=True)
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Precio", f"${price:,.2f}")
+            c1.metric("Precio", f"${current_price:,.2f}")
             c2.metric("Tendencia", display_signal, delta=regime)
             c3.metric("Funding", f"{fr:.4f}%")
             c4.metric("F&G", f"{fng_val}")
@@ -235,21 +288,21 @@ def main():
 
             # Tarjeta Trade
             sl_dist = atr * 1.5
-            sl = price - sl_dist if display_signal == "LONG" else price + sl_dist
-            tp1 = price + sl_dist if display_signal == "LONG" else price - sl_dist
-            tp2 = price + (sl_dist * 2) if display_signal == "LONG" else price - (sl_dist * 2)
-            tp3 = price + (sl_dist * 3.5) if display_signal == "LONG" else price - (sl_dist * 3.5)
-            opt_lev = calculate_optimal_leverage(price, sl)
+            sl = current_price - sl_dist if display_signal == "LONG" else current_price + sl_dist
+            tp1 = current_price + sl_dist if display_signal == "LONG" else current_price - sl_dist
+            tp2 = current_price + (sl_dist * 2) if display_signal == "LONG" else current_price - (sl_dist * 2)
+            tp3 = current_price + (sl_dist * 3.5) if display_signal == "LONG" else current_price - (sl_dist * 3.5)
+            opt_lev = strat_mgr.calculate_optimal_leverage(current_price, sl)
 
-            st.markdown(render_trade_card(display_signal, signal_strength, price, sl, tp1, tp2, tp3, opt_lev, prob), unsafe_allow_html=True)
+            st.markdown(render_trade_card(display_signal, signal_strength, current_price, sl, tp1, tp2, tp3, opt_lev, prob), unsafe_allow_html=True)
 
             c_btn1, c_btn2 = st.columns([1, 2])
             size = c_btn1.number_input("USDT", value=1000.0)
             btn_type = "primary" if signal_strength == "DIAMOND" else "secondary"
             if c_btn2.button(f"🚀 EJECUTAR {display_signal}", use_container_width=True, type=btn_type):
-                trade = {"timestamp": str(datetime.now()), "symbol": symbol, "type": display_signal, "entry": price, "size": size, "leverage": opt_lev, "sl": sl, "tp1": tp1, "tp2": 0, "tp3": 0, "status": "OPEN", "pnl": 0.0, "reason": f"{signal_strength}", "candles_held": 0, "atr_entry": atr}
+                trade = {"timestamp": str(datetime.now()), "symbol": symbol, "type": display_signal, "entry": current_price, "size": size, "leverage": opt_lev, "sl": sl, "tp1": tp1, "tp2": 0, "tp3": 0, "status": "OPEN", "pnl": 0.0, "reason": f"{signal_strength}", "candles_held": 0, "atr_entry": atr}
                 db_mgr.add_trade(trade)
-                with st.spinner("Notificando..."): send_telegram_alert(symbol, display_signal, price, sl, tp1, opt_lev)
+                with st.spinner("Notificando..."): send_telegram_alert(symbol, display_signal, current_price, sl, tp1, opt_lev)
                 st.success("✅ Orden Enviada")
 
         with col2:
@@ -259,56 +312,59 @@ def main():
             adr_val = df['ADR'].iloc[-1] if 'ADR' in df.columns else 0
             tsi_val = df['TSI'].iloc[-1] if 'TSI' in df.columns else 0
             mfi_val = df['MFI'].iloc[-1] if 'MFI' in df.columns else 50
-            st.markdown(render_quimera_ai(regime, atr, fr, fng_val, rsi_val, trend_str, adr_val, tsi_val, mfi_val, trend_status), unsafe_allow_html=True)
+            st.markdown(render_quimera_ai(regime, atr, fr, fng_val, rsi_val, trend_str, adr_val, tsi_val, mfi_val, trend_status, candle_pat), unsafe_allow_html=True)
             st.markdown(render_news_box(news), unsafe_allow_html=True)
 
-    # --- PESTAÑA 2: PAPER TRADING ---
-    with tab_paper:
-        st.markdown("### 💼 CARTERA PAPER TRADING")
+    # PESTAÑA 2: CARTERA
+    with tab2:
+        st.markdown("### 💼 Cartera Paper Trading")
         df_trades = db_mgr.load_trades()
         
-        # Calcular Métricas en Tiempo Real (Flotante)
         initial_balance = 10000.0
         floating_pnl = 0.0
-        realized_pnl = 0.0 # En futuro implementaremos cierres reales
+        realized_pnl = df_trades[df_trades['status']=='CLOSED']['pnl'].sum() if not df_trades.empty else 0.0
         
         if not df_trades.empty:
-            # Simulación de PnL Flotante
             for index, row in df_trades.iterrows():
                 if row['status'] == 'OPEN':
-                    # Calcular PnL no realizado
-                    # Fórmula: (Precio Actual - Entrada) * Tamaño * Apalancamiento / Entrada
-                    # Simplificado: Cambio % * Tamaño * Lev
                     if row['type'] == 'LONG':
-                        pnl = ((price - row['entry']) / row['entry']) * row['size'] * row['leverage']
+                        pnl = ((current_price - row['entry']) / row['entry']) * row['size'] * row['leverage']
                     else:
-                        pnl = ((row['entry'] - price) / row['entry']) * row['size'] * row['leverage']
+                        pnl = ((row['entry'] - current_price) / row['entry']) * row['size'] * row['leverage']
                     floating_pnl += pnl
 
-        total_equity = initial_balance + realized_pnl + floating_pnl
+        equity = initial_balance + realized_pnl + floating_pnl
         pnl_color = "green" if floating_pnl >= 0 else "red"
 
-        # KPIs
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-        kpi1.metric("Balance Inicial", f"${initial_balance:,.2f}")
-        kpi2.metric("Equity Actual", f"${total_equity:,.2f}", delta=f"{floating_pnl:,.2f}")
-        kpi3.metric("Trades Abiertos", len(df_trades))
-        kpi4.markdown(f"<div class='paper-metric'>PnL Flotante<br><span style='color:{pnl_color}; font-size:22px; font-weight:bold;'>${floating_pnl:,.2f}</span></div>", unsafe_allow_html=True)
-
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Balance Inicial", f"${initial_balance:,.2f}")
+        k2.metric("Equity Actual", f"${equity:,.2f}", delta=f"{floating_pnl:,.2f}")
+        k3.markdown(f"<div class='paper-metric'>PnL Flotante<br><span style='color:{'#3fb950' if floating_pnl>=0 else '#f85149'}; font-size:22px;'>${floating_pnl:,.2f}</span></div>", unsafe_allow_html=True)
+        
         st.divider()
-
-        # Gráfico de Evolución (Simulado con los trades)
         if not df_trades.empty:
-            st.subheader("📈 Historial de Operaciones")
-            # Colorear tabla según PnL estimado
-            st.dataframe(df_trades, use_container_width=True)
-            
-            # Gráfico simple de actividad
-            trades_per_day = pd.to_datetime(df_trades['timestamp']).dt.date.value_counts().sort_index()
-            st.bar_chart(trades_per_day)
-            st.caption("Actividad de trading por día")
+            st.dataframe(df_trades.style.applymap(lambda x: 'color: green' if x > 0 else 'color: red' if x < 0 else '', subset=['pnl']), use_container_width=True)
         else:
-            st.info("Aún no has abierto ninguna operación. Ve a la pestaña de Análisis y ejecuta una.")
+            st.info("No hay operaciones.")
+
+    # PESTAÑA 3: BACKTEST
+    with tab3:
+        st.subheader("🧪 Backtest Profesional")
+        days = st.slider("Días de Historial", 5, 60, 15)
+        if st.button("EJECUTAR BACKTEST"):
+            with st.spinner("Simulando..."):
+                # Truco: Pedimos más velas para el backtest
+                df_bt = data_mgr.fetch_market_data(symbol, timeframe, limit=days*96)
+                if df_bt is not None:
+                    df_bt = strat_mgr.prepare_data(df_bt)
+                    bt_res, ret, dd = strat_mgr.run_backtest_pro(df_bt)
+                    
+                    b1, b2 = st.columns(2)
+                    b1.metric("Retorno Total", f"{ret:.2f}%")
+                    b2.metric("Max Drawdown", f"{dd:.2f}%")
+                    st.area_chart(bt_res['equity'])
+                else:
+                    st.error("Datos insuficientes.")
 
 if __name__ == "__main__":
     main()
