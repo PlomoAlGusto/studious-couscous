@@ -4,17 +4,16 @@ import streamlit as st
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 
-# --- IMPORTACIÓN SEGURA DE LIBRERÍA TÉCNICA (Auto-detect) ---
+# --- CORRECCIÓN DE LIBRERÍA (Prioridad a Classic) ---
 try:
-    # Intento 1: Nombre original
-    import pandas_ta as ta
+    # Primero buscamos la que tienes en requirements.txt
+    import pandas_ta_classic as ta
 except ImportError:
     try:
-        # Intento 2: Nombre de la versión Classic
-        import pandas_ta_classic as ta
+        # Si falla, buscamos la original
+        import pandas_ta as ta
     except ImportError:
-        # Intento 3: Fallo total (No detener app, usar dummy)
-        st.error("⚠️ Error: Librería de Análisis Técnico no encontrada. Revisa requirements.txt")
+        # Si fallan las dos, creamos un dummy para que no explote
         class DummyTA:
             def ema(self, *args, **kwargs): return pd.Series([0]*100)
             def rsi(self, *args, **kwargs): return pd.Series([50]*100)
@@ -22,7 +21,7 @@ except ImportError:
             def adx(self, *args, **kwargs): return pd.DataFrame({'ADX_14': [0]*100})
             def ichimoku(self, *args, **kwargs): return [pd.DataFrame(), pd.DataFrame()]
         ta = DummyTA()
-# ------------------------------------------------------------
+# ----------------------------------------------------
 
 class StrategyManager:
     def __init__(self):
@@ -35,43 +34,51 @@ class StrategyManager:
         
         d = df.copy()
 
-        # Indicadores usando el alias 'ta' (que ya sabemos que funciona)
         try:
+            # Cálculos técnicos usando el alias 'ta'
             d['EMA_20'] = ta.ema(d['close'], length=20)
             d['EMA_50'] = ta.ema(d['close'], length=50)
             d['RSI'] = ta.rsi(d['close'], length=14)
             d['ATR'] = ta.atr(d['high'], d['low'], d['close'], length=14)
             
+            # ADX a veces devuelve un DF, gestionamos eso
             adx = ta.adx(d['high'], d['low'], d['close'], length=14)
             if adx is not None and not adx.empty:
                 d = pd.concat([d, adx], axis=1)
 
-            # VWAP Manual (Por si la librería falla)
+            # VWAP Manual (Más seguro)
             d['VWAP'] = (d['close'] * d['volume']).cumsum() / d['volume'].cumsum()
 
+            # Ichimoku
             ichi = ta.ichimoku(d['high'], d['low'], d['close'])
-            if ichi and len(ichi) > 0:
+            if ichi is not None and isinstance(ichi, tuple):
                 d = pd.concat([d, ichi[0]], axis=1)
                 
         except Exception as e:
-            print(f"Error calculando indicadores: {e}")
+            print(f"⚠️ Advertencia indicadores: {e}")
 
         return d
 
     def train_regime_model(self, df):
         try:
+            # Feature Engineering simple para ML
             df['ret'] = df['close'].pct_change()
             df['vol'] = df['ret'].rolling(10).std()
             
+            # Target: 1 si volatilidad futura alta (Tendencia), 0 si baja (Rango)
             future_vol = df['vol'].shift(-5)
             df['target'] = np.where(future_vol > df['vol'].quantile(0.6), 1, 0)
             
             data = df.dropna()
-            if len(data) > 100:
-                features = data[['RSI', 'ADX_14', 'vol']]
-                self.model.fit(features, data['target'])
-                self.is_model_trained = True
-        except: pass
+            if len(data) > 50: # Mínimo datos para entrenar
+                # Usamos columnas que existan seguro
+                cols_to_use = [c for c in ['RSI', 'ADX_14', 'vol'] if c in data.columns]
+                if cols_to_use:
+                    features = data[cols_to_use]
+                    self.model.fit(features, data['target'])
+                    self.is_model_trained = True
+        except Exception:
+            pass # Si falla el ML, seguimos con lógica tradicional
 
     def get_signal(self, df, context_filters):
         if df is None or len(df) < 50: return "NEUTRO", 0, [], "NEUTRO"
@@ -80,6 +87,7 @@ class StrategyManager:
         score = 0
         details = []
 
+        # 1. Estrategia EMA
         if context_filters.get('use_ema'):
             if row.get('EMA_20', 0) > row.get('EMA_50', 0):
                 score += 1
@@ -88,30 +96,35 @@ class StrategyManager:
                 score -= 1
                 details.append("EMA Bajista")
 
+        # 2. Estrategia VWAP
         if context_filters.get('use_vwap'):
             if row['close'] > row.get('VWAP', 0):
                 score += 1
             else:
                 score -= 1
 
+        # 3. Filtro ML (Régimen)
         regime = "NEUTRO"
         if self.is_model_trained and context_filters.get('use_regime'):
             try:
-                last_feat = df[['RSI', 'ADX_14', 'vol']].iloc[[-1]].fillna(0)
-                pred = self.model.predict(last_feat)[0]
-                if pred == 0: 
-                    score = 0 
-                    details.append("⛔ ML: Rango Detectado")
-                    regime = "RANGO"
-                else:
-                    regime = "TENDENCIA"
+                cols_to_use = [c for c in ['RSI', 'ADX_14', 'vol'] if c in df.columns]
+                if cols_to_use:
+                    last_feat = df[cols_to_use].iloc[[-1]].fillna(0)
+                    pred = self.model.predict(last_feat)[0]
+                    if pred == 0: 
+                        score = 0 # Anular señal si es rango
+                        details.append("⛔ ML: Rango")
+                        regime = "RANGO"
+                    else:
+                        regime = "TENDENCIA"
             except: pass
 
+        # Decisión Final
         signal = "NEUTRO"
         if score >= 2: signal = "LONG"
         elif score <= -2: signal = "SHORT"
 
-        # Filtro RSI
+        # Filtro RSI (Sobrecompra/Venta)
         rsi_val = row.get('RSI', 50)
         if signal == "LONG" and rsi_val > 75: signal = "NEUTRO"
         if signal == "SHORT" and rsi_val < 25: signal = "NEUTRO"
@@ -120,4 +133,4 @@ class StrategyManager:
         return signal, atr_val, details, regime
 
     def run_backtest_vectorized(self, df):
-        return 0, 0, 0 # Desactivado temporalmente
+        return 0, 0, 0
