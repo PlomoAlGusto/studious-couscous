@@ -11,7 +11,6 @@ except ImportError:
     try:
         import pandas_ta as ta
     except ImportError:
-        # Dummy mínimo por si falla la librería, pero calcularemos cosas a mano
         class DummyTA:
             def ema(self, *args, **kwargs): return pd.Series([0]*len(args[0]))
             def rsi(self, *args, **kwargs): return pd.Series([50]*len(args[0]))
@@ -33,31 +32,54 @@ class StrategyManager:
         
         d = df.copy()
 
+        # 1. CÁLCULOS MANUALES (Estos no fallan nunca)
         try:
-            # --- INDICADORES DE LIBRERÍA ---
+            # VWAP Manual
+            d['VWAP'] = (d['close'] * d['volume']).cumsum() / d['volume'].cumsum()
+        except:
+            d['VWAP'] = d['close'] # Fallback si no hay volumen
+
+        try:
+            # ADR Manual
+            d['range_pct'] = ((d['high'] - d['low']) / d['low']) * 100
+            d['ADR'] = d['range_pct'].rolling(window=14).mean()
+        except:
+            d['ADR'] = 0
+
+        # 2. INDICADORES DE LIBRERÍA (Protegidos individualmente)
+        
+        # EMAs
+        try:
             d['EMA_20'] = ta.ema(d['close'], length=20)
             d['EMA_50'] = ta.ema(d['close'], length=50)
+        except: pass
+
+        # RSI & ATR
+        try:
             d['RSI'] = ta.rsi(d['close'], length=14)
             d['ATR'] = ta.atr(d['high'], d['low'], d['close'], length=14)
+        except: pass
+
+        # TSI
+        try:
             d['TSI'] = ta.tsi(d['close'], fast=13, slow=25)
+        except: 
+            d['TSI'] = 0
+
+        # MFI
+        try:
             d['MFI'] = ta.mfi(d['high'], d['low'], d['close'], d['volume'], length=14)
-            
+        except: 
+            d['MFI'] = 50
+
+        # ADX
+        try:
             adx = ta.adx(d['high'], d['low'], d['close'], length=14)
             if adx is not None and not adx.empty:
                 d = pd.concat([d, adx], axis=1)
+        except: pass
 
-            # --- CÁLCULOS MANUALES (INFALIBLES) ---
-            # ADR: (High - Low) / Low * 100 -> Promedio 14 velas
-            d['candle_range_pct'] = ((d['high'] - d['low']) / d['low']) * 100
-            d['ADR'] = d['candle_range_pct'].rolling(window=14).mean()
-
-            # VWAP Manual
-            d['VWAP'] = (d['close'] * d['volume']).cumsum() / d['volume'].cumsum()
-
-        except Exception as e:
-            print(f"⚠️ Error indicadores: {e}")
-
-        # Limpiar NaNs iniciales para que no den 0.00
+        # Limpieza final
         d.fillna(method='bfill', inplace=True)
         d.fillna(0, inplace=True)
         return d
@@ -80,31 +102,38 @@ class StrategyManager:
         if df is None or len(df) < 50: return "NEUTRO", 0, [], "NEUTRO", "Sin Datos"
 
         row = df.iloc[-1]
-        prev_row = df.iloc[-2] # Vela anterior para detectar cruces
+        prev_row = df.iloc[-2]
         score = 0
         details = []
 
-        # --- ESTRATEGIA ---
+        # --- USO DE .GET() PARA EVITAR KEYERROR ---
+        
+        # 1. Filtro EMA
+        ema20 = row.get('EMA_20', 0)
+        ema50 = row.get('EMA_50', 0)
+        
         if context_filters.get('use_ema'):
-            if row['EMA_20'] > row['EMA_50']:
+            if ema20 > ema50:
                 score += 1
                 details.append("EMA Alcista")
             else:
                 score -= 1
                 details.append("EMA Bajista")
 
+        # 2. Filtro VWAP
+        vwap = row.get('VWAP', row['close']) # Si no hay VWAP, usa el precio (neutro)
         if context_filters.get('use_vwap'):
-            if row['close'] > row['VWAP']: score += 1
+            if row['close'] > vwap: score += 1
             else: score -= 1
 
-        # --- RÉGIMEN ---
+        # 3. Filtro ML
         regime = "NEUTRO"
         if self.is_model_trained and context_filters.get('use_regime'):
             try:
                 cols = [c for c in ['RSI', 'ADX_14', 'vol'] if c in df.columns]
                 if cols:
                     pred = self.model.predict(df[cols].iloc[[-1]])[0]
-                    if pred == 0: 
+                    if pred == 0:
                         score = 0
                         details.append("⛔ ML: Rango")
                         regime = "RANGO"
@@ -112,27 +141,33 @@ class StrategyManager:
                         regime = "TENDENCIA"
             except: pass
 
-        # --- SEÑAL FINAL ---
+        # Señal Final
         signal = "NEUTRO"
         if score >= 2: signal = "LONG"
         elif score <= -2: signal = "SHORT"
 
         # Filtro RSI
-        if signal == "LONG" and row['RSI'] > 75: signal = "NEUTRO"
-        if signal == "SHORT" and row['RSI'] < 25: signal = "NEUTRO"
+        rsi = row.get('RSI', 50)
+        if signal == "LONG" and rsi > 75: signal = "NEUTRO"
+        if signal == "SHORT" and rsi < 25: signal = "NEUTRO"
 
-        # --- ANÁLISIS DE CAMBIO DE TENDENCIA (NUEVO) ---
-        # Detectamos si las medias se acaban de cruzar
-        bull_cross = prev_row['EMA_20'] <= prev_row['EMA_50'] and row['EMA_20'] > row['EMA_50']
-        bear_cross = prev_row['EMA_20'] >= prev_row['EMA_50'] and row['EMA_20'] < row['EMA_50']
+        # Estado de Tendencia
+        prev_ema20 = prev_row.get('EMA_20', 0)
+        prev_ema50 = prev_row.get('EMA_50', 0)
+
+        bull_cross = prev_ema20 <= prev_ema50 and ema20 > ema50
+        bear_cross = prev_ema20 >= prev_ema50 and ema20 < ema50
         
-        trend_status = "Sin Cambios"
-        if bull_cross: trend_status = "🔄 GIRO ALCISTA CONFIRMADO"
-        elif bear_cross: trend_status = "🔄 GIRO BAJISTA CONFIRMADO"
-        elif signal == "LONG" and row['close'] < row['EMA_20']: trend_status = "⚠️ POSIBLE DEBILIDAD"
-        elif signal == "SHORT" and row['close'] > row['EMA_20']: trend_status = "⚠️ POSIBLE REBOTE"
-        elif regime == "TENDENCIA": trend_status = "✅ TENDENCIA FUERTE"
-        elif regime == "RANGO": trend_status = "💤 LATERAL / RANGO"
+        trend_status = "Estable"
+        if bull_cross: trend_status = "🔄 GIRO ALCISTA"
+        elif bear_cross: trend_status = "🔄 GIRO BAJISTA"
+        elif signal == "LONG" and row['close'] < ema20: trend_status = "⚠️ DEBILIDAD"
+        elif signal == "SHORT" and row['close'] > ema20: trend_status = "⚠️ REBOTE"
+        elif regime == "TENDENCIA": trend_status = "✅ FUERTE"
+        elif regime == "RANGO": trend_status = "💤 LATERAL"
 
-        atr_val = row['ATR']
+        atr_val = row.get('ATR', 0)
         return signal, atr_val, details, regime, trend_status
+
+    def run_backtest_vectorized(self, df):
+        return 0, 0, 0
