@@ -4,22 +4,22 @@ import streamlit as st
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 
-# --- IMPORTACIÓN SEGURA ---
+# --- IMPORTACIÓN DIRECTA (Solo la versión del ZIP) ---
 try:
     import pandas_ta_classic as ta
 except ImportError:
-    try:
-        import pandas_ta as ta
-    except ImportError:
-        class DummyTA:
-            def ema(self, *args, **kwargs): return pd.Series([0]*len(args[0]))
-            def rsi(self, *args, **kwargs): return pd.Series([50]*len(args[0]))
-            def atr(self, *args, **kwargs): return pd.Series([1]*len(args[0]))
-            def adx(self, *args, **kwargs): return pd.DataFrame({'ADX_14': [0]*len(args[0])})
-            def tsi(self, *args, **kwargs): return pd.Series([0]*len(args[0]))
-            def mfi(self, *args, **kwargs): return pd.Series([50]*len(args[0]))
-            def ichimoku(self, *args, **kwargs): return [pd.DataFrame(), pd.DataFrame()]
-        ta = DummyTA()
+    # Si por algún motivo falla el ZIP, usamos un Dummy de emergencia
+    # (Ya no intentamos importar la vieja 'pandas_ta' para evitar el aviso amarillo)
+    class DummyTA:
+        def ema(self, *args, **kwargs): return pd.Series([0]*len(args[0]))
+        def rsi(self, *args, **kwargs): return pd.Series([50]*len(args[0]))
+        def atr(self, *args, **kwargs): return pd.Series([1]*len(args[0]))
+        def adx(self, *args, **kwargs): return pd.DataFrame({'ADX_14': [0]*len(args[0])})
+        def tsi(self, *args, **kwargs): return pd.Series([0]*len(args[0]))
+        def mfi(self, *args, **kwargs): return pd.Series([50]*len(args[0]))
+        def ichimoku(self, *args, **kwargs): return [pd.DataFrame(), pd.DataFrame()]
+    ta = DummyTA()
+# -----------------------------------------------------
 
 class StrategyManager:
     def __init__(self):
@@ -32,54 +32,43 @@ class StrategyManager:
         
         d = df.copy()
 
-        # 1. CÁLCULOS MANUALES (Estos no fallan nunca)
+        # 1. CÁLCULOS MANUALES (Respaldo robusto)
         try:
-            # VWAP Manual
             d['VWAP'] = (d['close'] * d['volume']).cumsum() / d['volume'].cumsum()
         except:
-            d['VWAP'] = d['close'] # Fallback si no hay volumen
+            d['VWAP'] = d['close']
 
         try:
-            # ADR Manual
             d['range_pct'] = ((d['high'] - d['low']) / d['low']) * 100
             d['ADR'] = d['range_pct'].rolling(window=14).mean()
         except:
             d['ADR'] = 0
 
-        # 2. INDICADORES DE LIBRERÍA (Protegidos individualmente)
-        
-        # EMAs
+        # 2. INDICADORES DE LA LIBRERÍA ZIP (pandas_ta_classic)
         try:
             d['EMA_20'] = ta.ema(d['close'], length=20)
             d['EMA_50'] = ta.ema(d['close'], length=50)
         except: pass
 
-        # RSI & ATR
         try:
             d['RSI'] = ta.rsi(d['close'], length=14)
             d['ATR'] = ta.atr(d['high'], d['low'], d['close'], length=14)
         except: pass
 
-        # TSI
         try:
             d['TSI'] = ta.tsi(d['close'], fast=13, slow=25)
-        except: 
-            d['TSI'] = 0
+        except: d['TSI'] = 0
 
-        # MFI
         try:
             d['MFI'] = ta.mfi(d['high'], d['low'], d['close'], d['volume'], length=14)
-        except: 
-            d['MFI'] = 50
+        except: d['MFI'] = 50
 
-        # ADX
         try:
             adx = ta.adx(d['high'], d['low'], d['close'], length=14)
             if adx is not None and not adx.empty:
                 d = pd.concat([d, adx], axis=1)
         except: pass
 
-        # Limpieza final
         d.fillna(method='bfill', inplace=True)
         d.fillna(0, inplace=True)
         return d
@@ -106,9 +95,7 @@ class StrategyManager:
         score = 0
         details = []
 
-        # --- USO DE .GET() PARA EVITAR KEYERROR ---
-        
-        # 1. Filtro EMA
+        # Uso de .get() para evitar errores si falta alguna columna
         ema20 = row.get('EMA_20', 0)
         ema50 = row.get('EMA_50', 0)
         
@@ -120,13 +107,11 @@ class StrategyManager:
                 score -= 1
                 details.append("EMA Bajista")
 
-        # 2. Filtro VWAP
-        vwap = row.get('VWAP', row['close']) # Si no hay VWAP, usa el precio (neutro)
+        vwap = row.get('VWAP', row['close'])
         if context_filters.get('use_vwap'):
             if row['close'] > vwap: score += 1
             else: score -= 1
 
-        # 3. Filtro ML
         regime = "NEUTRO"
         if self.is_model_trained and context_filters.get('use_regime'):
             try:
@@ -141,20 +126,17 @@ class StrategyManager:
                         regime = "TENDENCIA"
             except: pass
 
-        # Señal Final
         signal = "NEUTRO"
         if score >= 2: signal = "LONG"
         elif score <= -2: signal = "SHORT"
 
-        # Filtro RSI
         rsi = row.get('RSI', 50)
         if signal == "LONG" and rsi > 75: signal = "NEUTRO"
         if signal == "SHORT" and rsi < 25: signal = "NEUTRO"
 
-        # Estado de Tendencia
+        # Tendencia
         prev_ema20 = prev_row.get('EMA_20', 0)
         prev_ema50 = prev_row.get('EMA_50', 0)
-
         bull_cross = prev_ema20 <= prev_ema50 and ema20 > ema50
         bear_cross = prev_ema20 >= prev_ema50 and ema20 < ema50
         
