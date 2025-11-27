@@ -6,7 +6,6 @@ from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timezone
 
-# --- IMPORTACIONES ---
 try:
     from config import config
     from database import TradeManager
@@ -14,12 +13,15 @@ try:
     from strategy import StrategyManager
     from utils import setup_logging, init_nltk, send_telegram_alert
 except ImportError as e:
-    st.error(f"Error crítico: {e}")
-    st.stop()
+    st.error(f"Error crítico: {e}"); st.stop()
 
 st.set_page_config(page_title="Quimera Pro", layout="wide", page_icon="🦁")
 setup_logging()
 init_nltk()
+
+# --- INICIALIZAR ESTADO DE MEMORIA (FIX BACKTEST) ---
+if "bt_data" not in st.session_state:
+    st.session_state.bt_data = None
 
 # --- CSS ---
 st.markdown("""
@@ -45,7 +47,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNCIONES VISUALES ---
 def display_market_sessions():
     now = datetime.now(timezone.utc)
     hour = now.hour
@@ -66,31 +67,27 @@ def calculate_optimal_leverage(entry, sl):
 
 def render_trade_card(type, signal_strength, price, sl, tp1, tp2, tp3, lev, prob):
     if signal_strength == "DIAMOND":
-        header = f"💎 SEÑAL DIAMANTE: {type}"
-        h_color = "#3fb950" if type == "LONG" else "#f85149"
-        bar_color = h_color
+        header = f"💎 SEÑAL DIAMANTE: {type}"; h_color = "#3fb950" if type == "LONG" else "#f85149"; bar_color = h_color
     else:
-        header = f"⚠️ OPORTUNIDAD POTENCIAL: {type}"
-        h_color = "#d29922"
-        bar_color = "#d29922"
+        header = f"⚠️ OPORTUNIDAD POTENCIAL: {type}"; h_color = "#d29922"; bar_color = "#d29922"
 
     html = f"""
-<div class="trade-card-box">
-<div style="text-align:center; font-size:20px; font-weight:bold; color:{h_color}; margin-bottom:5px; letter-spacing:1px; text-transform:uppercase;">{header}</div>
-<div style="display:flex; justify-content:space-between; font-size:12px; color:#8b949e; margin-bottom:5px;"><span>CONFIANZA IA</span><span style="color:{bar_color}; font-weight:bold;">{prob}%</span></div>
-<div class="prob-track"><div style="width:{prob}%; height:100%; background-color:{bar_color}; box-shadow: 0 0 15px {bar_color};"></div></div>
-<div class="price-grid-row">
-<div class="price-col"><div class="t-label">ENTRADA</div><div class="t-val c-blue">${price:,.2f}</div></div>
-<div class="price-col"><div class="t-label">STOP LOSS</div><div class="t-val c-red">${sl:,.2f}</div></div>
-<div class="price-col"><div class="t-label">LEVERAGE</div><div class="t-val c-white">{lev}x</div></div>
-</div>
-<div class="price-grid-row" style="margin-bottom:0;">
-<div class="price-box-dark"><div class="t-label">TP 1</div><div class="t-val c-green">${tp1:,.2f}</div></div>
-<div class="price-box-dark"><div class="t-label">TP 2</div><div class="t-val c-green">${tp2:,.2f}</div></div>
-<div class="price-box-dark"><div class="t-label">TP 3</div><div class="t-val c-green">${tp3:,.2f}</div></div>
-</div>
-</div>
-"""
+    <div class="trade-card-box">
+    <div style="text-align:center; font-size:20px; font-weight:bold; color:{h_color}; margin-bottom:5px; letter-spacing:1px; text-transform:uppercase;">{header}</div>
+    <div style="display:flex; justify-content:space-between; font-size:12px; color:#8b949e; margin-bottom:5px;"><span>CONFIANZA IA</span><span style="color:{bar_color}; font-weight:bold;">{prob}%</span></div>
+    <div class="prob-track"><div style="width:{prob}%; height:100%; background-color:{bar_color}; box-shadow: 0 0 15px {bar_color};"></div></div>
+    <div class="price-grid-row">
+    <div class="price-col"><div class="t-label">ENTRADA</div><div class="t-val c-blue">${price:,.2f}</div></div>
+    <div class="price-col"><div class="t-label">STOP LOSS</div><div class="t-val c-red">${sl:,.2f}</div></div>
+    <div class="price-col"><div class="t-label">LEVERAGE</div><div class="t-val c-white">{lev}x</div></div>
+    </div>
+    <div class="price-grid-row" style="margin-bottom:0;">
+    <div class="price-box-dark"><div class="t-label">TP 1</div><div class="t-val c-green">${tp1:,.2f}</div></div>
+    <div class="price-box-dark"><div class="t-label">TP 2</div><div class="t-val c-green">${tp2:,.2f}</div></div>
+    <div class="price-box-dark"><div class="t-label">TP 3</div><div class="t-val c-green">${tp3:,.2f}</div></div>
+    </div>
+    </div>
+    """
     return textwrap.dedent(html)
 
 def render_quimera_ai(regime, atr, fr, fng, rsi, trend_strength, adr_val, tsi_val, mfi_val, trend_status):
@@ -98,17 +95,17 @@ def render_quimera_ai(regime, atr, fr, fng, rsi, trend_strength, adr_val, tsi_va
     c_trend = "#a371f7" if "GIRO" in trend_status else "#e6edf3"
     
     html = f"""
-<div style="margin-bottom:10px; font-weight:bold; color:#a371f7; display:flex; align-items:center; gap:5px; font-size:14px;"><span>🧠 QUIMERA AI ANALYSIS</span></div>
-<div class="ai-box-container">
-<div class="ai-row-item" style="background:rgba(255,255,255,0.03);"><span style="color:#a371f7; font-weight:bold;">⚠️ Estado Tendencia</span><span style="color:{c_trend}; font-weight:bold">{trend_status}</span></div>
-<div class="ai-row-item"><span style="color:#8b949e">🌊 Estructura</span><span style="color:{c_reg}; font-weight:bold">{regime}</span></div>
-<div class="ai-row-item"><span style="color:#8b949e">📊 Fuerza ADX</span><span style="color:#e6edf3; font-weight:bold">{trend_strength}</span></div>
-<div class="ai-row-item"><span style="color:#8b949e">📏 ADR (Rango)</span><span style="color:#e6edf3; font-weight:bold">{adr_val:.2f}%</span></div>
-<div class="ai-row-item"><span style="color:#8b949e">🚀 TSI (Momento)</span><span style="color:#e6edf3; font-weight:bold">{tsi_val:.2f}</span></div>
-<div class="ai-row-item"><span style="color:#8b949e">🌡️ Sentimiento</span><span style="color:#e6edf3; font-weight:bold">{fng}</span></div>
-<div class="ai-row-item"><span style="color:#8b949e">💢 Volatilidad $</span><span style="color:#e6edf3; font-weight:bold">${atr:.2f}</span></div>
-</div>
-"""
+    <div style="margin-bottom:10px; font-weight:bold; color:#a371f7; display:flex; align-items:center; gap:5px; font-size:14px;"><span>🧠 QUIMERA AI ANALYSIS</span></div>
+    <div class="ai-box-container">
+    <div class="ai-row-item" style="background:rgba(255,255,255,0.03);"><span style="color:#a371f7; font-weight:bold;">⚠️ Estado Tendencia</span><span style="color:{c_trend}; font-weight:bold">{trend_status}</span></div>
+    <div class="ai-row-item"><span style="color:#8b949e">🌊 Estructura</span><span style="color:{c_reg}; font-weight:bold">{regime}</span></div>
+    <div class="ai-row-item"><span style="color:#8b949e">📊 Fuerza ADX</span><span style="color:#e6edf3; font-weight:bold">{trend_strength}</span></div>
+    <div class="ai-row-item"><span style="color:#8b949e">📏 ADR (Rango)</span><span style="color:#e6edf3; font-weight:bold">{adr_val:.2f}%</span></div>
+    <div class="ai-row-item"><span style="color:#8b949e">🚀 TSI (Momento)</span><span style="color:#e6edf3; font-weight:bold">{tsi_val:.2f}</span></div>
+    <div class="ai-row-item"><span style="color:#8b949e">🌡️ Sentimiento</span><span style="color:#e6edf3; font-weight:bold">{fng}</span></div>
+    <div class="ai-row-item"><span style="color:#8b949e">💢 Volatilidad $</span><span style="color:#e6edf3; font-weight:bold">${atr:.2f}</span></div>
+    </div>
+    """
     return textwrap.dedent(html)
 
 def render_news_box(news):
@@ -116,9 +113,9 @@ def render_news_box(news):
     for n in news[:10]:
         news_items_html += f"<div class='news-row'><a class='news-link' href='{n['link']}' target='_blank'>🔗 {n['title']}</a></div>"
     html = f"""
-<div style="font-weight:bold; margin-bottom:10px; color:white;">📰 LIVE NEWS (10)</div>
-<div class="news-container" style="height:400px; overflow-y:auto; border-left: 4px solid white;">{news_items_html}</div>
-"""
+    <div style="font-weight:bold; margin-bottom:10px; color:white;">📰 LIVE NEWS (10)</div>
+    <div class="news-container" style="height:400px; overflow-y:auto; border-left: 4px solid white;">{news_items_html}</div>
+    """
     return textwrap.dedent(html)
 
 # --- SIDEBAR ---
@@ -129,12 +126,25 @@ with st.sidebar:
     symbol = st.text_input("Ticker", "BTC/USDT").upper()
     timeframe = st.selectbox("Timeframe", ["15m", "1h", "4h", "1d"])
     
+    with st.expander("📡 RADAR MULTI-TICKER", expanded=False):
+        if st.button("ESCANEAR TOP 5"):
+            scan_list = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT"]
+            data_mgr_scan = DataManager()
+            strat_mgr_scan = StrategyManager()
+            st.markdown("---")
+            for s in scan_list:
+                y_s = s.replace("/", "-").replace("USDT", "USD")
+                if "USD" not in y_s: y_s += "-USD"
+                df_scan = data_mgr_scan.fetch_market_data(s, timeframe, limit=60)
+                if df_scan is not None:
+                    df_scan = strat_mgr_scan.prepare_data(df_scan)
+                    sig, _, _, reg, _, _ = strat_mgr_scan.get_signal(df_scan, {'use_ema':True})
+                    icon = "💎" if sig != "NEUTRO" else "💤"
+                    color = "green" if sig=="LONG" else "red" if sig=="SHORT" else "grey"
+                    st.markdown(f"**{s}:** :{color}[{sig}] {icon}")
+
     with st.expander("⚙️ FILTROS", expanded=True):
-        filters = {
-            'use_ema': st.checkbox("Tendencia EMA", True),
-            'use_vwap': st.checkbox("Filtro VWAP", True),
-            'use_regime': st.checkbox("Filtro ML", True)
-        }
+        filters = { 'use_ema': st.checkbox("Tendencia EMA", True), 'use_vwap': st.checkbox("Filtro VWAP", True), 'use_regime': st.checkbox("Filtro ML", True) }
     
     auto_trade_on = st.toggle("🤖 AUTO-TRADE (Diamante)", value=False)
     auto_refresh = st.checkbox("🔄 AUTO-SCAN (60s)", False)
@@ -162,14 +172,12 @@ def main():
 
     if df is None: st.error("❌ Error de datos."); return
 
-    # Monitor de Cierre
     current_price = df['close'].iloc[-1]
     closed_trades = db_mgr.check_sl_tp(current_price, symbol)
     for c in closed_trades:
-        st.toast(f"💰 CIERRE: {c['reason']} (${c['pnl']:.2f})", icon="🔔")
+        st.toast(f"💰 CIERRE AUTO: {c['reason']} (PnL: ${c['pnl']:.2f})", icon="🔔")
         send_telegram_alert(symbol, f"CIERRE: {c['reason']}", current_price, 0, 0, c['leverage'])
 
-    # Análisis
     df = strat_mgr.prepare_data(df)
     strat_mgr.train_regime_model(df)
     signal_raw, atr, details, regime, trend_status, candle_pat = strat_mgr.get_signal(df, filters)
@@ -186,10 +194,9 @@ def main():
     prob = 85 if signal_strength == "DIAMOND" else 60
     if regime == "TENDENCIA": prob += 5
 
-    # Auto-Trade
     if auto_trade_on:
         executed, msg = strat_mgr.check_and_execute_auto(db_mgr, symbol, display_signal, signal_strength, current_price, atr)
-        if executed: st.toast(f"🤖 Auto-Trade: {display_signal}", icon="🦁")
+        if executed: st.toast(f"🤖 Auto-Trade Ejecutado: {display_signal}", icon="🦁")
 
     # --- TABS ---
     tab1, tab2, tab3 = st.tabs(["🦁 ANÁLISIS", "💼 CARTERA", "🧪 BACKTEST"])
@@ -199,7 +206,7 @@ def main():
         with col1:
             st.markdown(f"""<div style='display:flex; gap:10px; margin-bottom:15px;'><span class='symbol-tag'>{symbol}</span><span class='source-tag'>📡 YAHOO</span><span class='source-tag'>⏱️ {timeframe}</span></div>""", unsafe_allow_html=True)
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Precio", f"${current_price:,.2f}")
+            c1.metric("Precio", f"${price:,.2f}")
             c2.metric("Tendencia", display_signal, delta=regime)
             c3.metric("Funding", f"{fr:.4f}%")
             c4.metric("F&G", f"{fng_val}")
@@ -269,21 +276,17 @@ def main():
         st.subheader("🧪 Backtest Profesional (Filtros + Fees)")
         days = st.slider("Días de Historial", 5, 60, 15)
         
-        # --- CORRECCIÓN DEL SALTO DE PESTAÑA (SESSION STATE) ---
-        if "bt_data" not in st.session_state: st.session_state.bt_data = None
-        
+        # --- GESTIÓN DE ESTADO (PERSISTENCIA) ---
         if st.button("EJECUTAR BACKTEST"):
             with st.spinner("Simulando..."):
                 df_bt = data_mgr.fetch_market_data(symbol, timeframe, limit=days*96)
                 if df_bt is not None:
                     df_bt = strat_mgr.prepare_data(df_bt)
                     bt_res, ret, dd = strat_mgr.run_backtest_pro(df_bt)
-                    # Guardamos en memoria
-                    st.session_state.bt_data = {"res": bt_res, "ret": ret, "dd": dd}
+                    st.session_state.bt_data = {"res": bt_res, "ret": ret, "dd": dd} # Guardar en memoria
                 else: st.error("Datos insuficientes.")
 
-        # Mostramos el resultado si existe en memoria
-        if st.session_state.bt_data:
+        if "bt_data" in st.session_state and st.session_state.bt_data:
             d = st.session_state.bt_data
             b1, b2 = st.columns(2)
             b1.metric("Retorno Total", f"{d['ret']:.2f}%")
