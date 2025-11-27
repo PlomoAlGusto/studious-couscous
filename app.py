@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import textwrap
 from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timezone
@@ -21,12 +20,12 @@ st.set_page_config(page_title="Quimera Pro", layout="wide", page_icon="🦁")
 setup_logging()
 init_nltk()
 
-# --- CSS BLINDADO (ESTILO FINAL) ---
+# --- CSS BLINDADO ---
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; }
     
-    /* TAGS CABECERA */
+    /* TAGS */
     .source-tag { background-color: #21262d; color: #8b949e; padding: 4px 8px; border-radius: 4px; font-size: 11px; border: 1px solid #30363d; font-family: monospace; }
     .symbol-tag { background-color: #1f6feb; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; font-family: monospace; }
 
@@ -65,14 +64,8 @@ st.markdown("""
     .c-green { color: #3fb950 !important; }
     .c-white { color: #f0f6fc !important; }
 
-    /* CAJA NOTICIAS (ESTILO SOLICITADO) */
-    .news-container-box { 
-        background-color: #161b22 !important; 
-        border-left: 4px solid #FFFFFF !important; /* LÍNEA BLANCA */
-        border-radius: 4px !important; 
-        padding: 15px !important;
-        margin-bottom: 20px !important;
-    }
+    /* NOTICIAS */
+    .news-container { background-color: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 15px; }
     .news-row { padding: 8px 0; border-bottom: 1px solid #21262d; font-size: 12px; }
     .news-link { color: #c9d1d9; text-decoration: none; }
     .news-link:hover { color: #58a6ff; }
@@ -98,7 +91,7 @@ def calculate_optimal_leverage(entry, sl):
     safe_lev = int(0.02 / dist_pct)
     return max(1, min(safe_lev, 50))
 
-# --- GENERADORES HTML ---
+# --- GENERADORES HTML SIN ESPACIOS (SOLUCIÓN) ---
 def render_trade_card(type, signal_strength, price, sl, tp1, tp2, tp3, lev, prob):
     if signal_strength == "DIAMOND":
         header = f"💎 SEÑAL DIAMANTE: {type}"
@@ -106,101 +99,56 @@ def render_trade_card(type, signal_strength, price, sl, tp1, tp2, tp3, lev, prob
         bar_color = h_color
     else:
         header = f"⚠️ OPORTUNIDAD POTENCIAL: {type}"
-        h_color = "#d29922" # Naranja riesgo
+        h_color = "#d29922"
         bar_color = "#d29922"
 
+    # NOTA: El HTML empieza pegado a la izquierda para evitar errores de renderizado
     html = f"""
-    <div class="trade-card-box">
-        <div style="text-align:center; font-size:20px; font-weight:bold; color:{h_color}; margin-bottom:5px; letter-spacing:1px; text-transform:uppercase;">
-            {header}
-        </div>
-        
-        <div style="display:flex; justify-content:space-between; font-size:12px; color:#8b949e; margin-bottom:5px;">
-            <span>CONFIANZA IA</span>
-            <span style="color:{bar_color}; font-weight:bold;">{prob}%</span>
-        </div>
-        
-        <div class="prob-track">
-            <div style="width:{prob}%; height:100%; background-color:{bar_color}; box-shadow: 0 0 15px {bar_color};"></div>
-        </div>
-
-        <div class="price-grid-row">
-            <div class="price-col">
-                <div class="t-label">ENTRADA</div>
-                <div class="t-val c-blue">${price:,.2f}</div>
-            </div>
-            <div class="price-col">
-                <div class="t-label">STOP LOSS</div>
-                <div class="t-val c-red">${sl:,.2f}</div>
-            </div>
-            <div class="price-col">
-                <div class="t-label">LEVERAGE</div>
-                <div class="t-val c-white">{lev}x</div>
-            </div>
-        </div>
-
-        <div class="price-grid-row" style="margin-bottom:0;">
-            <div class="price-box-dark">
-                <div class="t-label">TP 1</div>
-                <div class="t-val c-green">${tp1:,.2f}</div>
-            </div>
-            <div class="price-box-dark">
-                <div class="t-label">TP 2</div>
-                <div class="t-val c-green">${tp2:,.2f}</div>
-            </div>
-            <div class="price-box-dark">
-                <div class="t-label">TP 3</div>
-                <div class="t-val c-green">${tp3:,.2f}</div>
-            </div>
-        </div>
-    </div>
-    """
-    return textwrap.dedent(html)
+<div class="trade-card-box">
+<div style="text-align:center; font-size:20px; font-weight:bold; color:{h_color}; margin-bottom:5px; letter-spacing:1px; text-transform:uppercase;">{header}</div>
+<div style="display:flex; justify-content:space-between; font-size:12px; color:#8b949e; margin-bottom:5px;"><span>CONFIANZA IA</span><span style="color:{bar_color}; font-weight:bold;">{prob}%</span></div>
+<div class="prob-track"><div style="width:{prob}%; height:100%; background-color:{bar_color}; box-shadow: 0 0 15px {bar_color};"></div></div>
+<div class="price-grid-row">
+<div class="price-col"><div class="t-label">ENTRADA</div><div class="t-val c-blue">${price:,.2f}</div></div>
+<div class="price-col"><div class="t-label">STOP LOSS</div><div class="t-val c-red">${sl:,.2f}</div></div>
+<div class="price-col"><div class="t-label">LEVERAGE</div><div class="t-val c-white">{lev}x</div></div>
+</div>
+<div class="price-grid-row" style="margin-bottom:0;">
+<div class="price-box-dark"><div class="t-label">TP 1</div><div class="t-val c-green">${tp1:,.2f}</div></div>
+<div class="price-box-dark"><div class="t-label">TP 2</div><div class="t-val c-green">${tp2:,.2f}</div></div>
+<div class="price-box-dark"><div class="t-label">TP 3</div><div class="t-val c-green">${tp3:,.2f}</div></div>
+</div>
+</div>
+"""
+    return html
 
 def render_quimera_ai(regime, atr, fr, fng, rsi, trend_strength):
     c_reg = "#3fb950" if "TENDENCIA" in regime else "#d29922"
     html = f"""
-    <div style="margin-bottom:10px; font-weight:bold; color:#a371f7; display:flex; align-items:center; gap:5px; font-size:14px;">
-        <span>🧠 QUIMERA AI ANALYSIS</span>
-    </div>
-    <div style="background-color:#161b22; border-top:3px solid #a371f7; padding:15px; border-radius:0 0 6px 6px; margin-bottom:20px;">
-        <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #30363d;">
-            <span style="color:#8b949e">🌊 Estructura</span><span style="color:{c_reg}; font-weight:bold">{regime}</span>
-        </div>
-        <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #30363d;">
-            <span style="color:#8b949e">📊 Fuerza</span><span style="color:#e6edf3; font-weight:bold">{trend_strength}</span>
-        </div>
-        <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #30363d;">
-            <span style="color:#8b949e">💢 Volatilidad</span><span style="color:#e6edf3; font-weight:bold">${atr:.2f}</span>
-        </div>
-        <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #30363d;">
-            <span style="color:#8b949e">🐋 Funding</span><span style="color:#e6edf3; font-weight:bold">{fr:.4f}%</span>
-        </div>
-        <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #30363d;">
-            <span style="color:#8b949e">🌡️ Sentimiento</span><span style="color:#e6edf3; font-weight:bold">{fng}</span>
-        </div>
-        <div style="display:flex; justify-content:space-between; padding:8px 0;">
-            <span style="color:#8b949e">🔮 RSI (14)</span><span style="color:#e6edf3; font-weight:bold">{rsi:.1f}</span>
-        </div>
-    </div>
-    """
-    return textwrap.dedent(html)
+<div style="margin-bottom:10px; font-weight:bold; color:#a371f7; display:flex; align-items:center; gap:5px; font-size:14px;"><span>🧠 QUIMERA AI ANALYSIS</span></div>
+<div style="background-color:#161b22; border-top:3px solid #a371f7; padding:15px; border-radius:0 0 6px 6px; margin-bottom:20px;">
+<div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #30363d;"><span style="color:#8b949e">🌊 Estructura</span><span style="color:{c_reg}; font-weight:bold">{regime}</span></div>
+<div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #30363d;"><span style="color:#8b949e">📊 Fuerza</span><span style="color:#e6edf3; font-weight:bold">{trend_strength}</span></div>
+<div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #30363d;"><span style="color:#8b949e">💢 Volatilidad</span><span style="color:#e6edf3; font-weight:bold">${atr:.2f}</span></div>
+<div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #30363d;"><span style="color:#8b949e">🐋 Funding</span><span style="color:#e6edf3; font-weight:bold">{fr:.4f}%</span></div>
+<div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #30363d;"><span style="color:#8b949e">🌡️ Sentimiento</span><span style="color:#e6edf3; font-weight:bold">{fng}</span></div>
+<div style="display:flex; justify-content:space-between; padding:8px 0;"><span style="color:#8b949e">🔮 RSI (14)</span><span style="color:#e6edf3; font-weight:bold">{rsi:.1f}</span></div>
+</div>
+"""
+    return html
 
 def render_news_box(news):
-    # Generamos el HTML de las noticias internas
     news_items_html = ""
     for n in news[:10]:
         news_items_html += f"<div class='news-row'><a class='news-link' href='{n['link']}' target='_blank'>🔗 {n['title']}</a></div>"
     
     html = f"""
-    <div style="font-weight:bold; margin-bottom:10px; color:white;">📰 LIVE NEWS (10)</div>
-    <div class="news-container-box">
-        <div style="height:400px; overflow-y:auto;">
-            {news_items_html}
-        </div>
-    </div>
-    """
-    return textwrap.dedent(html)
+<div style="font-weight:bold; margin-bottom:10px; color:white;">📰 LIVE NEWS (10)</div>
+<div class="news-container" style="height:400px; overflow-y:auto; border-left: 4px solid white;">
+{news_items_html}
+</div>
+"""
+    return html
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -241,14 +189,12 @@ def main():
     signal_raw, atr, details, regime = strat_mgr.get_signal(df, filters)
     price = df['close'].iloc[-1]
     
-    # --- LÓGICA DE FUERZA (Siempre calculamos una señal potencial) ---
+    # Lógica de Señal
     display_signal = signal_raw
     signal_strength = "WEAK"
     
-    # Si el bot dice NEUTRO, nosotros forzamos un análisis de tendencia para mostrar "POTENCIAL"
     if signal_raw == "NEUTRO":
         last = df.iloc[-1]
-        # Usamos EMA rápida vs lenta para determinar dirección potencial
         if last['EMA_20'] > last['EMA_50']:
             display_signal = "LONG"
             signal_strength = "POTENTIAL"
@@ -256,10 +202,8 @@ def main():
             display_signal = "SHORT"
             signal_strength = "POTENTIAL"
     else:
-        # Si el bot dio señal real
         signal_strength = "DIAMOND"
 
-    # Probabilidad
     prob = 85 if signal_strength == "DIAMOND" else 60
     if regime == "TENDENCIA": prob += 5
 
@@ -291,7 +235,7 @@ def main():
         fig.update_layout(template="plotly_dark", height=500, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- TARJETA DE TRADE (SIEMPRE VISIBLE) ---
+        # --- TARJETA DE TRADE ---
         sl_dist = atr * 1.5
         sl = price - sl_dist if display_signal == "LONG" else price + sl_dist
         tp1 = price + sl_dist if display_signal == "LONG" else price - sl_dist
@@ -320,13 +264,13 @@ def main():
             st.success("✅ Orden Enviada")
 
     with col2:
-        # 1. IA Analysis
+        # IA Analysis
         last_rsi = df['RSI'].iloc[-1]
         adx_val = df['ADX_14'].iloc[-1] if 'ADX_14' in df.columns else 0
         trend_str = "Fuerte" if adx_val > 25 else "Débil"
         st.markdown(render_quimera_ai(regime, atr, fr, fng_val, last_rsi, trend_str), unsafe_allow_html=True)
 
-        # 2. Noticias (Caja Blanca)
+        # Noticias
         st.markdown(render_news_box(news), unsafe_allow_html=True)
 
     # --- HISTORIAL ---
