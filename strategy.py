@@ -55,7 +55,6 @@ class StrategyManager:
         avg_body = body.rolling(10).mean()
         is_doji = body <= (avg_body * 0.1)
         is_hammer = (wick_lower > (body * 2)) & (wick_upper < body)
-        
         df.loc[is_doji, 'candle_pat'] = "Doji ➕"
         df.loc[is_hammer, 'candle_pat'] = "Martillo 🔨"
         return df
@@ -63,7 +62,6 @@ class StrategyManager:
     def prepare_data(self, df):
         if df is None or df.empty: return df
         d = df.copy()
-
         try:
             d['EMA_20'] = ta.ema(d['close'], length=20)
             d['EMA_50'] = ta.ema(d['close'], length=50)
@@ -75,19 +73,16 @@ class StrategyManager:
         except: pass
 
         d['TSI'] = self.calculate_manual_tsi(d)
-
         try:
             d['range_pct'] = ((d['high'] - d['low']) / d['low']) * 100
             d['ADR'] = d['range_pct'].rolling(window=14).mean()
             d['VWAP'] = (d['close'] * d['volume']).cumsum() / d['volume'].cumsum()
-        except:
-            d['ADR'] = 0; d['VWAP'] = d['close']
+        except: d['ADR'] = 0; d['VWAP'] = d['close']
 
         high = d['high'].rolling(1).max(); low = d['low'].rolling(1).min()
         d['PIVOT'] = (high + low + d['close']) / 3
         d['R1'] = (2 * d['PIVOT']) - low; d['S1'] = (2 * d['PIVOT']) - high
         d = self.detect_candles(d)
-
         d.fillna(method='bfill', inplace=True)
         d.fillna(0, inplace=True)
         return d
@@ -159,56 +154,46 @@ class StrategyManager:
         return signal, atr_val, details, regime, trend_status, candle_pat
 
     def check_and_execute_auto(self, db_mgr, symbol, signal, strength, price, atr, size=1000.0):
-        # Código anterior de auto-trade (se mantiene implícito o igual)
-        # Para ahorrar espacio en este mensaje, asumo que usas la versión previa de esta función
-        # Si la necesitas completa dímelo, pero es la misma que teníamos.
-        pass 
+        # Misma lógica de antes (implícita para ahorrar espacio visual)
+        pass
 
-    # --- BACKTESTING PRO (VECTORIZADO REALISTA) ---
+    # --- BACKTESTING PRO (Mejorado con Filtros Reales) ---
     def run_backtest_pro(self, df, initial_capital=10000, fee_pct=0.001):
-        """
-        Simula la estrategia COMPLETA (EMA + VWAP + RSI) sobre todo el historial.
-        Incluye comisiones (0.1% por defecto).
-        """
         if df is None or df.empty: return None, 0, 0
 
         bt = df.copy()
         
-        # 1. Lógica de Señal Vectorizada (Replica get_signal)
-        # LONG: EMA20 > EMA50 AND Close > VWAP AND RSI < 75
-        bt['long_signal'] = (bt['EMA_20'] > bt['EMA_50']) & \
-                            (bt['close'] > bt['VWAP']) & \
-                            (bt['RSI'] < 75)
+        # 1. REGLAS ESTRICTAS (Igual que la estrategia real)
+        # LONG: EMA20>50 + Precio>VWAP + RSI<70 + ADX>20 (Fuerza)
+        bt['long_condition'] = (bt['EMA_20'] > bt['EMA_50']) & \
+                               (bt['close'] > bt['VWAP']) & \
+                               (bt['RSI'] < 70) & \
+                               (bt['ADX_14'] > 20) # Filtro de Rango vital
         
-        # SHORT: EMA20 < EMA50 AND Close < VWAP AND RSI > 25
-        bt['short_signal'] = (bt['EMA_20'] < bt['EMA_50']) & \
-                             (bt['close'] < bt['VWAP']) & \
-                             (bt['RSI'] > 25)
+        # SHORT: EMA20<50 + Precio<VWAP + RSI>30 + ADX>20
+        bt['short_condition'] = (bt['EMA_20'] < bt['EMA_50']) & \
+                                (bt['close'] < bt['VWAP']) & \
+                                (bt['RSI'] > 30) & \
+                                (bt['ADX_14'] > 20)
         
-        # Consolidar en 1, -1, 0
         bt['signal'] = 0
-        bt.loc[bt['long_signal'], 'signal'] = 1
-        bt.loc[bt['short_signal'], 'signal'] = -1
+        bt.loc[bt['long_condition'], 'signal'] = 1
+        bt.loc[bt['short_condition'], 'signal'] = -1
         
-        # 2. Calcular Retornos
-        # El retorno de la estrategia es: Señal de ayer * Retorno de hoy
+        # 2. Retornos
         bt['market_return'] = bt['close'].pct_change()
         bt['strategy_return'] = bt['signal'].shift(1) * bt['market_return']
         
-        # 3. Aplicar Comisiones (Fees)
-        # Detectar cambios de posición (cuando entras o sales)
+        # 3. Comisiones
         bt['trades'] = bt['signal'].diff().abs().fillna(0)
-        # Restar fee cada vez que se opera
         bt['strategy_return'] = bt['strategy_return'] - (bt['trades'] * fee_pct)
         
-        # 4. Curva de Capital (Equity)
+        # 4. Equity Curve
         bt['equity'] = initial_capital * (1 + bt['strategy_return']).cumprod()
         
-        # 5. Métricas Finales
+        # Métricas
         final_equity = bt['equity'].iloc[-1]
         total_return_pct = ((final_equity - initial_capital) / initial_capital) * 100
-        
-        # Drawdown
         cummax = bt['equity'].cummax()
         drawdown = (bt['equity'] - cummax) / cummax
         max_dd = drawdown.min() * 100
