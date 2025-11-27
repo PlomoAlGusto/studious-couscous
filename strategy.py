@@ -104,8 +104,10 @@ class StrategyManager:
     def get_signal(self, df, context_filters):
         if df is None or len(df) < 50: return "NEUTRO", 0, [], "NEUTRO", "Sin Datos", "Normal"
 
-        row = df.iloc[-1]; prev_row = df.iloc[-2]
-        score = 0; details = []
+        row = df.iloc[-1]
+        prev_row = df.iloc[-2]
+        score = 0
+        details = []
 
         ema20 = row.get('EMA_20', 0); ema50 = row.get('EMA_50', 0)
         if context_filters.get('use_ema'):
@@ -154,6 +156,7 @@ class StrategyManager:
 
     def check_and_execute_auto(self, db_mgr, symbol, signal, strength, price, atr, size=1000.0):
         if strength != "DIAMOND": return False, "No Diamond"
+        
         last_trade_time_str = db_mgr.get_last_trade_time(symbol)
         if last_trade_time_str:
             last_trade_time = datetime.strptime(last_trade_time_str, "%Y-%m-%d %H:%M:%S")
@@ -171,38 +174,46 @@ class StrategyManager:
             return True, "Executed"
         return False, "DB Error"
 
-    # --- BACKTEST MEJORADO (Filtros Estrictos) ---
+    # --- BACKTESTING FRANCOTIRADOR (DIAMANTE REAL) ---
     def run_backtest_pro(self, df, initial_capital=10000, fee_pct=0.001):
         if df is None or df.empty: return None, 0, 0
 
         bt = df.copy()
         
-        # FILTROS MÁS ESTRICTOS PARA MEJORAR EL RESULTADO
-        # Solo operamos si la tendencia es MUY clara
-        # ADX > 25 (Tendencia fuerte) en lugar de 20
-        bt['long_signal'] = (bt['EMA_20'] > bt['EMA_50']) & \
-                            (bt['close'] > bt['VWAP']) & \
-                            (bt['RSI'] < 70) & \
-                            (bt['ADX_14'] > 25) # Filtro estricto
+        # === REGLAS DE ENTRADA: SOLO DIAMANTES ===
+        # 1. Tendencia EMA
+        cond_ema_long = bt['EMA_20'] > bt['EMA_50']
+        cond_ema_short = bt['EMA_20'] < bt['EMA_50']
         
-        bt['short_signal'] = (bt['EMA_20'] < bt['EMA_50']) & \
-                             (bt['close'] < bt['VWAP']) & \
-                             (bt['RSI'] > 30) & \
-                             (bt['ADX_14'] > 25)
+        # 2. VWAP (Institucional)
+        cond_vwap_long = bt['close'] > bt['VWAP']
+        cond_vwap_short = bt['close'] < bt['VWAP']
+        
+        # 3. RSI (Sin sobrecompra/venta)
+        cond_rsi_long = (bt['RSI'] > 45) & (bt['RSI'] < 70)
+        cond_rsi_short = (bt['RSI'] < 55) & (bt['RSI'] > 30)
+        
+        # 4. ADX (FUERZA DE TENDENCIA - VITAL)
+        # Si ADX < 25, el mercado está plano y nos matan las comisiones. No operamos.
+        cond_adx = bt['ADX_14'] > 25 
+
+        # COMBINACIÓN FRANCOTIRADOR
+        bt['long_signal'] = cond_ema_long & cond_vwap_long & cond_rsi_long & cond_adx
+        bt['short_signal'] = cond_ema_short & cond_vwap_short & cond_rsi_short & cond_adx
         
         bt['signal'] = 0
         bt.loc[bt['long_signal'], 'signal'] = 1
         bt.loc[bt['short_signal'], 'signal'] = -1
         
-        # Retornos
+        # === CÁLCULO DE RETORNOS ===
         bt['market_return'] = bt['close'].pct_change()
         bt['strategy_return'] = bt['signal'].shift(1) * bt['market_return']
         
-        # Comisiones
+        # Comisiones (Cada vez que cambia la señal de 0 a 1 o -1, pagamos)
         bt['trades'] = bt['signal'].diff().abs().fillna(0)
         bt['strategy_return'] = bt['strategy_return'] - (bt['trades'] * fee_pct)
         
-        # Equity
+        # Equity Curve
         bt['equity'] = initial_capital * (1 + bt['strategy_return']).cumprod()
         
         final_equity = bt['equity'].iloc[-1]
