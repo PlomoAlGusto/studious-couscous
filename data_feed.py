@@ -1,106 +1,124 @@
-import ccxt
+import yfinance as yf
 import pandas as pd
+import requests
 import feedparser
-import logging
+import numpy as np
 import streamlit as st
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
 from config import config
 
-# Configuración NLTK
+# --- IMPORTACIÓN SEGURA DE LIBRERÍA TÉCNICA ---
+try:
+    import pandas_ta_classic as ta
+except ImportError:
+    try:
+        import pandas_ta as ta
+    except ImportError:
+        pass
+# ----------------------------------------------
+
+# --- CORRECCIÓN AUTOMÁTICA DE NLTK ---
 try:
     nltk.data.find('sentiment/vader_lexicon.zip')
 except LookupError:
     nltk.download('vader_lexicon')
-
-sia = SentimentIntensityAnalyzer()
+# -------------------------------------
 
 class DataManager:
     def __init__(self):
-        # RESTAURANDO TU LÓGICA ORIGINAL DE CONEXIÓN
-        self.exchange, self.source_name = self._init_exchange()
-
-    def _init_exchange(self):
-        """
-        Lógica original del usuario:
-        1. Binance API Key (si existe)
-        2. Binance Público
-        3. Kraken (Fallback)
-        """
-        # 1. Intentar Binance Privado
-        try:
-            if config.BINANCE_API_KEY and config.BINANCE_SECRET:
-                ex = ccxt.binance({
-                    'apiKey': config.BINANCE_API_KEY,
-                    'secret': config.BINANCE_SECRET,
-                    'options': {'defaultType': 'spot'}
-                })
-                ex.load_markets()
-                print("✅ CONECTADO: Binance (Privado)")
-                return ex, "Binance"
-        except: pass
-
-        # 2. Intentar Binance Público
-        try:
-            ex = ccxt.binance()
-            ex.load_markets()
-            print("✅ CONECTADO: Binance (Público)")
-            return ex, "Binance"
-        except: pass
-
-        # 3. Intentar Kraken (Tu Fallback original)
-        try:
-            ex = ccxt.kraken()
-            ex.load_markets()
-            print("⚠️ CONECTADO: Kraken (Respaldo)")
-            return ex, "Kraken"
-        except:
-            print("❌ ERROR: Todos los exchanges fallaron.")
-            return None, "None"
+        # Yahoo Finance no necesita inicialización compleja
+        pass
 
     @st.cache_data(ttl=15)
     def fetch_market_data(_self, symbol, timeframe, limit=100):
-        if not _self.exchange: return None
-        
+        """
+        Descarga datos usando Yahoo Finance (Resistente a bloqueos de IP en la nube)
+        """
         try:
-            # Ajuste de símbolo según el exchange conectado
-            ticker = symbol
+            # 1. Adaptar el símbolo (Binance: BTC/USDT -> Yahoo: BTC-USD)
+            yahoo_symbol = symbol.replace("/", "-").replace("USDT", "USD")
+            if "USD" not in yahoo_symbol: 
+                yahoo_symbol += "-USD"
+
+            # 2. Mapeo de Timeframes para Yahoo
+            period = "5d" 
+            if timeframe == "15m": period = "5d"
+            elif timeframe == "1h": period = "1mo"
+            elif timeframe == "4h": period = "3mo"
+            elif timeframe == "1d": period = "1y"
+
+            # 3. Descargar
+            df = yf.download(tickers=yahoo_symbol, period=period, interval=timeframe, progress=False)
             
-            # Binance prefiere formato con barra BTC/USDT
-            if _self.source_name == "Binance" and "/" not in ticker:
-                ticker = ticker.replace("USDT", "/USDT")
+            if df.empty:
+                print(f"❌ Yahoo devolvió vacío para {yahoo_symbol}")
+                return None
+
+            # 4. Limpieza de formato (Yahoo a veces devuelve MultiIndex)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = [c[0] for c in df.columns]
             
-            # Kraken a veces requiere códigos específicos, pero probamos estándar primero
+            df.reset_index(inplace=True)
             
-            # TU LLAMADA ORIGINAL
-            ohlcv = _self.exchange.fetch_ohlcv(ticker, timeframe, limit=limit)
-            
-            if not ohlcv: return None
-            
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            # 5. Renombrar columnas al estándar del Bot
+            # Yahoo: Date/Datetime, Open, High, Low, Close, Volume
+            # Bot: timestamp, open, high, low, close, volume
+            rename_map = {
+                'Date': 'timestamp', 
+                'Datetime': 'timestamp',
+                'Open': 'open', 
+                'High': 'high', 
+                'Low': 'low', 
+                'Close': 'close', 
+                'Volume': 'volume'
+            }
+            df.rename(columns=rename_map, inplace=True)
+
+            # 6. Asegurar tipos numéricos
+            cols = ['open', 'high', 'low', 'close', 'volume']
+            for c in cols:
+                if c in df.columns:
+                    df[c] = df[c].astype(float)
+
             return df
+
         except Exception as e:
-            print(f"❌ Error obteniendo velas: {e}")
+            print(f"❌ ERROR YAHOO: {e}")
             return None
 
     @st.cache_data(ttl=60)
     def get_funding_rate(_self, symbol):
-        # Simplificado para no provocar errores de API extras
+        # Yahoo no tiene Funding Rate de futuros, devolvemos neutro
         return 0.01, 0
 
     @st.cache_data(ttl=300)
     def fetch_news(_self, symbol):
+        """Descarga las últimas 10 noticias y analiza sentimiento"""
         news = []
         try:
+            # Inicialización tardía para evitar errores de carga
+            sia = SentimentIntensityAnalyzer()
+            
             feed = feedparser.parse("https://cointelegraph.com/rss")
-            for entry in feed.entries[:5]:
+            
+            # --- AHORA TRAEMOS 10 NOTICIAS ---
+            for entry in feed.entries[:10]:
                 s = sia.polarity_scores(entry.title)['compound']
-                news.append({"title": entry.title, "link": entry.link, "sentiment": s})
-        except: pass
+                news.append({
+                    "title": entry.title, 
+                    "link": entry.link, 
+                    "sentiment": s,
+                    "source": "CoinTelegraph"
+                })
+        except Exception: 
+            pass
         return news
     
     @st.cache_data(ttl=3600)
     def fetch_fear_greed(_self):
-        # Valor por defecto para no bloquear la app con más peticiones HTTP
-        return 50, "Neutral"
+        try:
+            r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5).json()
+            d = r['data'][0]
+            return int(d['value']), d['value_classification']
+        except: return 50, "Neutral"
