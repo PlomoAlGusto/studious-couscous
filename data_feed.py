@@ -1,124 +1,127 @@
-import yfinance as yf
+import sqlite3
 import pandas as pd
-import requests
-import feedparser
-import numpy as np
-import streamlit as st
-import nltk
-from nltk.sentiment import SentimentIntensityAnalyzer
+import logging
 from config import config
+from datetime import datetime
 
-# --- IMPORTACIÓN SEGURA DE LIBRERÍA TÉCNICA ---
-try:
-    import pandas_ta_classic as ta
-except ImportError:
-    try:
-        import pandas_ta as ta
-    except ImportError:
-        pass
-# ----------------------------------------------
-
-# --- CORRECCIÓN AUTOMÁTICA DE NLTK ---
-try:
-    nltk.data.find('sentiment/vader_lexicon.zip')
-except LookupError:
-    nltk.download('vader_lexicon')
-# -------------------------------------
-
-class DataManager:
+class TradeManager:
     def __init__(self):
-        # Yahoo Finance no necesita inicialización compleja
-        pass
+        self.db_path = config.DB_NAME
+        self.init_db()
 
-    @st.cache_data(ttl=15)
-    def fetch_market_data(_self, symbol, timeframe, limit=100):
-        """
-        Descarga datos usando Yahoo Finance (Resistente a bloqueos de IP en la nube)
-        """
+    def get_connection(self):
+        return sqlite3.connect(self.db_path, check_same_thread=False)
+
+    def init_db(self):
+        conn = self.get_connection()
         try:
-            # 1. Adaptar el símbolo (Binance: BTC/USDT -> Yahoo: BTC-USD)
-            yahoo_symbol = symbol.replace("/", "-").replace("USDT", "USD")
-            if "USD" not in yahoo_symbol: 
-                yahoo_symbol += "-USD"
+            cursor = conn.cursor()
+            # Añadimos columnas de salida si no existen (para versiones viejas)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT, symbol TEXT, type TEXT, entry REAL, size REAL,
+                    leverage REAL, sl REAL, tp1 REAL, tp2 REAL, tp3 REAL,
+                    status TEXT, pnl REAL, reason TEXT, candles_held INTEGER, atr_entry REAL,
+                    exit_price REAL, exit_time TEXT
+                )
+            ''')
+            try:
+                cursor.execute("ALTER TABLE trades ADD COLUMN exit_price REAL")
+                cursor.execute("ALTER TABLE trades ADD COLUMN exit_time TEXT")
+            except: pass # Ya existen
+            conn.commit()
+        except Exception as e:
+            logging.error(f"Error DB: {e}")
+        finally:
+            conn.close()
 
-            # 2. Mapeo de Timeframes para Yahoo
-            period = "5d" 
-            if timeframe == "15m": period = "5d"
-            elif timeframe == "1h": period = "1mo"
-            elif timeframe == "4h": period = "3mo"
-            elif timeframe == "1d": period = "1y"
+    def load_trades(self):
+        conn = self.get_connection()
+        try:
+            return pd.read_sql("SELECT * FROM trades ORDER BY id DESC", conn)
+        except: return pd.DataFrame()
+        finally: conn.close()
 
-            # 3. Descargar
-            df = yf.download(tickers=yahoo_symbol, period=period, interval=timeframe, progress=False)
-            
-            if df.empty:
-                print(f"❌ Yahoo devolvió vacío para {yahoo_symbol}")
-                return None
+    def add_trade(self, trade_dict):
+        conn = self.get_connection()
+        try:
+            columns = ', '.join(trade_dict.keys())
+            placeholders = ', '.join(['?'] * len(trade_dict))
+            sql = f"INSERT INTO trades ({columns}) VALUES ({placeholders})"
+            conn.cursor().execute(sql, list(trade_dict.values()))
+            conn.commit()
+            return True
+        except: return False
+        finally: conn.close()
 
-            # 4. Limpieza de formato (Yahoo a veces devuelve MultiIndex)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [c[0] for c in df.columns]
-            
-            df.reset_index(inplace=True)
-            
-            # 5. Renombrar columnas al estándar del Bot
-            # Yahoo: Date/Datetime, Open, High, Low, Close, Volume
-            # Bot: timestamp, open, high, low, close, volume
-            rename_map = {
-                'Date': 'timestamp', 
-                'Datetime': 'timestamp',
-                'Open': 'open', 
-                'High': 'high', 
-                'Low': 'low', 
-                'Close': 'close', 
-                'Volume': 'volume'
-            }
-            df.rename(columns=rename_map, inplace=True)
+    def get_last_trade_time(self, symbol):
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT timestamp FROM trades WHERE symbol = ? ORDER BY id DESC LIMIT 1", (symbol,))
+            res = cursor.fetchone()
+            return res[0] if res else None
+        finally: conn.close()
 
-            # 6. Asegurar tipos numéricos
-            cols = ['open', 'high', 'low', 'close', 'volume']
-            for c in cols:
-                if c in df.columns:
-                    df[c] = df[c].astype(float)
+    def reset_account(self):
+        conn = self.get_connection()
+        conn.cursor().execute("DELETE FROM trades")
+        conn.commit()
+        conn.close()
 
-            return df
+    # --- NUEVO: SISTEMA DE CIERRE AUTOMÁTICO (TP/SL) ---
+    def check_sl_tp(self, current_price, symbol):
+        """Revisa trades abiertos y los cierra si tocan SL o TP"""
+        conn = self.get_connection()
+        closed_trades = []
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM trades WHERE status = 'OPEN' AND symbol = ?", (symbol,))
+            # Convertir a lista de dicts
+            cols = [description[0] for description in cursor.description]
+            open_trades = [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+            for t in open_trades:
+                reason = None
+                pnl = 0.0
+                
+                # Lógica LONG
+                if t['type'] == 'LONG':
+                    if current_price <= t['sl']: reason = "STOP LOSS 🛑"
+                    elif current_price >= t['tp3']: reason = "TP 3 (MOON) 🚀"
+                    elif current_price >= t['tp2'] and t['reason'] != "TP2 Hit": reason = "TP 2 💰" # Simplificado
+                    elif current_price >= t['tp1'] and t['reason'] != "TP1 Hit": reason = "TP 1 ✅" # Simplificado
+                    
+                    if reason:
+                        pnl = ((current_price - t['entry']) / t['entry']) * t['size'] * t['leverage']
+
+                # Lógica SHORT
+                elif t['type'] == 'SHORT':
+                    if current_price >= t['sl']: reason = "STOP LOSS 🛑"
+                    elif current_price <= t['tp3']: reason = "TP 3 (MOON) 🚀"
+                    elif current_price <= t['tp2']: reason = "TP 2 💰"
+                    elif current_price <= t['tp1']: reason = "TP 1 ✅"
+                    
+                    if reason:
+                        pnl = ((t['entry'] - current_price) / t['entry']) * t['size'] * t['leverage']
+
+                if reason:
+                    # Actualizar DB
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    cursor.execute("""
+                        UPDATE trades SET status='CLOSED', pnl=?, reason=?, exit_price=?, exit_time=? 
+                        WHERE id=?
+                    """, (pnl, reason, current_price, now, t['id']))
+                    conn.commit()
+                    
+                    t['pnl'] = pnl
+                    t['reason'] = reason
+                    closed_trades.append(t)
 
         except Exception as e:
-            print(f"❌ ERROR YAHOO: {e}")
-            return None
-
-    @st.cache_data(ttl=60)
-    def get_funding_rate(_self, symbol):
-        # Yahoo no tiene Funding Rate de futuros, devolvemos neutro
-        return 0.01, 0
-
-    @st.cache_data(ttl=300)
-    def fetch_news(_self, symbol):
-        """Descarga las últimas 10 noticias y analiza sentimiento"""
-        news = []
-        try:
-            # Inicialización tardía para evitar errores de carga
-            sia = SentimentIntensityAnalyzer()
-            
-            feed = feedparser.parse("https://cointelegraph.com/rss")
-            
-            # --- AHORA TRAEMOS 10 NOTICIAS ---
-            for entry in feed.entries[:10]:
-                s = sia.polarity_scores(entry.title)['compound']
-                news.append({
-                    "title": entry.title, 
-                    "link": entry.link, 
-                    "sentiment": s,
-                    "source": "CoinTelegraph"
-                })
-        except Exception: 
-            pass
-        return news
-    
-    @st.cache_data(ttl=3600)
-    def fetch_fear_greed(_self):
-        try:
-            r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5).json()
-            d = r['data'][0]
-            return int(d['value']), d['value_classification']
-        except: return 50, "Neutral"
+            print(f"Error checking SL/TP: {e}")
+        finally:
+            conn.close()
+        
+        return closed_trades
