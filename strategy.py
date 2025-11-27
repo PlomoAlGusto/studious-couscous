@@ -1,20 +1,15 @@
 import pandas as pd
 import numpy as np
 import streamlit as st
-from datetime import datetime
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 
-# Imports necesarios para la ejecución
-from utils import send_telegram_alert
-
-# --- IMPORTACIÓN SEGURA ---
+# Importación segura
 try:
     import pandas_ta_classic as ta
 except ImportError:
-    try:
-        import pandas_ta as ta
-    except ImportError:
+    try: import pandas_ta as ta
+    except: 
         class DummyTA:
             def ema(self, *args, **kwargs): return pd.Series([0]*len(args[0]))
             def rsi(self, *args, **kwargs): return pd.Series([50]*len(args[0]))
@@ -31,7 +26,7 @@ class StrategyManager:
         self.model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
         self.is_model_trained = False
 
-    # --- UTILIDADES MATEMÁTICAS ---
+    # --- UTILIDADES ---
     def calculate_manual_tsi(self, df, fast=13, slow=25):
         try:
             diff = df['close'].diff(1)
@@ -42,18 +37,44 @@ class StrategyManager:
             fast_slow_ema_abs = slow_ema_abs.ewm(span=fast, min_periods=fast, adjust=False).mean()
             tsi = 100 * (fast_slow_ema / fast_slow_ema_abs)
             return tsi.fillna(0)
-        except:
-            return pd.Series([0] * len(df))
+        except: return pd.Series([0] * len(df))
 
     def calculate_optimal_leverage(self, entry, sl):
-        """Calcula apalancamiento seguro (Riesgo 2%)"""
         if entry == 0: return 1
         dist_pct = abs(entry - sl) / entry
         if dist_pct == 0: return 1
         safe_lev = int(0.02 / dist_pct)
         return max(1, min(safe_lev, 50))
 
-    # --- PREPARACIÓN DE DATOS ---
+    def detect_candles(self, df):
+        """Detección manual de velas japonesas (Sin librerías extra)"""
+        df['candle_pat'] = "Normal"
+        
+        # Cálculos auxiliares
+        body = (df['close'] - df['open']).abs()
+        wick_upper = df['high'] - df[['open', 'close']].max(axis=1)
+        wick_lower = df[['open', 'close']].min(axis=1) - df['low']
+        avg_body = body.rolling(10).mean()
+
+        # 1. DOJI (Cuerpo muy pequeño)
+        is_doji = body <= (avg_body * 0.1)
+        
+        # 2. MARTILLO (Hammer) - Mecha inferior larga, cuerpo pequeño arriba
+        is_hammer = (wick_lower > (body * 2)) & (wick_upper < body)
+        
+        # 3. ENGULFING (Envolvente)
+        prev_body = body.shift(1)
+        is_bull_engulf = (df['close'] > df['open']) & (df['close'].shift(1) < df['open'].shift(1)) & (body > prev_body) & (df['close'] > df['open'].shift(1)) & (df['open'] < df['close'].shift(1))
+        is_bear_engulf = (df['close'] < df['open']) & (df['close'].shift(1) > df['open'].shift(1)) & (body > prev_body)
+        
+        # Asignación
+        df.loc[is_doji, 'candle_pat'] = "Doji ➕"
+        df.loc[is_hammer, 'candle_pat'] = "Martillo 🔨"
+        df.loc[is_bull_engulf, 'candle_pat'] = "Envolvente Alcista 🟩"
+        df.loc[is_bear_engulf, 'candle_pat'] = "Envolvente Bajista 🟥"
+        
+        return df
+
     def prepare_data(self, df):
         if df is None or df.empty: return df
         d = df.copy()
@@ -67,21 +88,19 @@ class StrategyManager:
             if adx is not None: d = pd.concat([d, adx], axis=1)
         except: pass
 
-        # Manuales
         d['TSI'] = self.calculate_manual_tsi(d)
         try:
             d['range_pct'] = ((d['high'] - d['low']) / d['low']) * 100
             d['ADR'] = d['range_pct'].rolling(window=14).mean()
             d['VWAP'] = (d['close'] * d['volume']).cumsum() / d['volume'].cumsum()
-        except: 
-            d['ADR'] = 0; d['VWAP'] = d['close']
+        except: d['ADR'] = 0; d['VWAP'] = d['close']
 
-        # Pivotes
-        high = d['high'].rolling(1).max()
-        low = d['low'].rolling(1).min()
+        high = d['high'].rolling(1).max(); low = d['low'].rolling(1).min()
         d['PIVOT'] = (high + low + d['close']) / 3
-        d['R1'] = (2 * d['PIVOT']) - low
-        d['S1'] = (2 * d['PIVOT']) - high
+        d['R1'] = (2 * d['PIVOT']) - low; d['S1'] = (2 * d['PIVOT']) - high
+
+        # Detección de Velas
+        d = self.detect_candles(d)
 
         d.fillna(method='bfill', inplace=True)
         d.fillna(0, inplace=True)
@@ -101,7 +120,8 @@ class StrategyManager:
         except: pass
 
     def get_signal(self, df, context_filters):
-        if df is None or len(df) < 50: return "NEUTRO", 0, [], "NEUTRO", "Sin Datos"
+        if df is None or len(df) < 50: return "NEUTRO", 0, [], "NEUTRO", "Sin Datos", "Normal"
+
         row = df.iloc[-1]
         prev_row = df.iloc[-2]
         score = 0
@@ -114,7 +134,7 @@ class StrategyManager:
 
         vwap = row.get('VWAP', row['close'])
         if context_filters.get('use_vwap'):
-            if row['close'] > vwap: score += 1; 
+            if row['close'] > vwap: score += 1
             else: score -= 1
 
         regime = "NEUTRO"
@@ -131,12 +151,10 @@ class StrategyManager:
         if score >= 2: signal = "LONG"
         elif score <= -2: signal = "SHORT"
 
-        # Filtro RSI
         rsi = row.get('RSI', 50)
         if signal == "LONG" and rsi > 75: signal = "NEUTRO"
         if signal == "SHORT" and rsi < 25: signal = "NEUTRO"
 
-        # Estado Tendencia
         prev_ema20 = prev_row.get('EMA_20', 0); prev_ema50 = prev_row.get('EMA_50', 0)
         bull_cross = prev_ema20 <= prev_ema50 and ema20 > ema50
         bear_cross = prev_ema20 >= prev_ema50 and ema20 < ema50
@@ -150,53 +168,53 @@ class StrategyManager:
         elif regime == "RANGO": trend_status = "💤 LATERAL"
 
         atr_val = row.get('ATR', 0)
-        return signal, atr_val, details, regime, trend_status
+        candle_pat = row.get('candle_pat', 'Normal')
+        
+        return signal, atr_val, details, regime, trend_status, candle_pat
 
-    # --- NUEVO: LÓGICA DE AUTO-EJECUCIÓN EN EL CEREBRO ---
     def check_and_execute_auto(self, db_mgr, symbol, signal, strength, price, atr, size=1000.0):
-        """
-        Evalúa si debe ejecutar un trade automático (Solo Diamantes, con Cooldown)
-        """
-        if strength != "DIAMOND": 
-            return False, "No Diamond" # Solo operamos lo mejor
-
-        # Verificar Cooldown (Enfriamiento de 1 hora)
+        if strength != "DIAMOND": return False, "No Diamond"
+        
         last_trade_time_str = db_mgr.get_last_trade_time(symbol)
         if last_trade_time_str:
             last_trade_time = datetime.strptime(last_trade_time_str, "%Y-%m-%d %H:%M:%S")
             if (datetime.now() - last_trade_time).total_seconds() < 3600:
                 return False, "Cooldown"
 
-        # Calcular Niveles
         sl_dist = atr * 1.5
         sl = price - sl_dist if signal == "LONG" else price + sl_dist
         tp1 = price + sl_dist if signal == "LONG" else price - sl_dist
-        
-        # Calcular Lev Óptimo (Ahora es método de la clase)
         opt_lev = self.calculate_optimal_leverage(price, sl)
 
-        # Construir Trade
         trade = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "symbol": symbol,
-            "type": signal,
-            "entry": price,
-            "size": size,
-            "leverage": opt_lev,
-            "sl": sl,
-            "tp1": tp1,
-            "tp2": 0, "tp3": 0,
-            "status": "OPEN",
-            "pnl": 0.0,
-            "reason": "AUTO-DIAMOND (Strategy)",
-            "candles_held": 0, 
-            "atr_entry": atr
+            "symbol": symbol, "type": signal, "entry": price, "size": size,
+            "leverage": opt_lev, "sl": sl, "tp1": tp1, "tp2": 0, "tp3": 0,
+            "status": "OPEN", "pnl": 0.0, "reason": "AUTO-DIAMOND", "candles_held": 0, "atr_entry": atr
         }
-
-        # Guardar y Notificar
         saved = db_mgr.add_trade(trade)
         if saved:
             send_telegram_alert(symbol, f"{signal} (AUTO)", price, sl, tp1, opt_lev)
             return True, "Executed"
-        
         return False, "DB Error"
+
+    # --- BACKTESTING VECTORIZADO VISUAL ---
+    def run_backtest(self, df, initial_capital=10000):
+        """Ejecuta un backtest rápido y devuelve el DF con señales y Equity Curve"""
+        if df is None: return None
+        
+        bt_df = df.copy()
+        bt_df['signal'] = 0
+        
+        # Estrategia Simple para Backtest: Cruce de EMAs
+        bt_df.loc[bt_df['EMA_20'] > bt_df['EMA_50'], 'signal'] = 1
+        bt_df.loc[bt_df['EMA_20'] < bt_df['EMA_50'], 'signal'] = -1
+        
+        # Calcular retornos (Estrategia siempre en mercado Long/Short)
+        bt_df['market_return'] = bt_df['close'].pct_change()
+        bt_df['strategy_return'] = bt_df['signal'].shift(1) * bt_df['market_return']
+        
+        # Equity Curve
+        bt_df['equity'] = initial_capital * (1 + bt_df['strategy_return']).cumprod()
+        
+        return bt_df
