@@ -52,10 +52,8 @@ class StrategyManager:
         wick_upper = df['high'] - df[['open', 'close']].max(axis=1)
         wick_lower = df[['open', 'close']].min(axis=1) - df['low']
         avg_body = body.rolling(10).mean()
-        
         is_doji = body <= (avg_body * 0.1)
         is_hammer = (wick_lower > (body * 2)) & (wick_upper < body)
-        
         df.loc[is_doji, 'candle_pat'] = "Doji ➕"
         df.loc[is_hammer, 'candle_pat'] = "Martillo 🔨"
         return df
@@ -64,8 +62,10 @@ class StrategyManager:
         if df is None or df.empty: return df
         d = df.copy()
         try:
+            # Indicadores básicos
             d['EMA_20'] = ta.ema(d['close'], length=20)
             d['EMA_50'] = ta.ema(d['close'], length=50)
+            d['EMA_200'] = ta.ema(d['close'], length=200) # NUEVO: Tendencia Macro
             d['RSI'] = ta.rsi(d['close'], length=14)
             d['ATR'] = ta.atr(d['high'], d['low'], d['close'], length=14)
             d['MFI'] = ta.mfi(d['high'], d['low'], d['close'], d['volume'], length=14)
@@ -80,9 +80,11 @@ class StrategyManager:
             d['VWAP'] = (d['close'] * d['volume']).cumsum() / d['volume'].cumsum()
         except: d['ADR'] = 0; d['VWAP'] = d['close']
 
+        # Pivotes
         high = d['high'].rolling(1).max(); low = d['low'].rolling(1).min()
         d['PIVOT'] = (high + low + d['close']) / 3
         d['R1'] = (2 * d['PIVOT']) - low; d['S1'] = (2 * d['PIVOT']) - high
+        
         d = self.detect_candles(d)
         d.fillna(method='bfill', inplace=True)
         d.fillna(0, inplace=True)
@@ -109,54 +111,57 @@ class StrategyManager:
         score = 0
         details = []
 
-        ema20 = row.get('EMA_20', 0); ema50 = row.get('EMA_50', 0)
-        if context_filters.get('use_ema'):
-            if ema20 > ema50: score += 1; details.append("EMA Alcista")
-            else: score -= 1; details.append("EMA Bajista")
-
-        vwap = row.get('VWAP', row['close'])
-        if context_filters.get('use_vwap'):
-            if row['close'] > vwap: score += 1
-            else: score -= 1
-
-        regime = "NEUTRO"
-        if self.is_model_trained and context_filters.get('use_regime'):
-            try:
-                cols = [c for c in ['RSI', 'ADX_14', 'vol'] if c in df.columns]
-                if cols:
-                    pred = self.model.predict(df[cols].iloc[[-1]])[0]
-                    if pred == 0: score = 0; details.append("⛔ ML: Rango"); regime = "RANGO"
-                    else: regime = "TENDENCIA"
-            except: pass
-
-        signal = "NEUTRO"
-        if score >= 2: signal = "LONG"
-        elif score <= -2: signal = "SHORT"
-
-        rsi = row.get('RSI', 50)
-        if signal == "LONG" and rsi > 75: signal = "NEUTRO"
-        if signal == "SHORT" and rsi < 25: signal = "NEUTRO"
-
-        prev_ema20 = prev_row.get('EMA_20', 0); prev_ema50 = prev_row.get('EMA_50', 0)
-        bull_cross = prev_ema20 <= prev_ema50 and ema20 > ema50
-        bear_cross = prev_ema20 >= prev_ema50 and ema20 < ema50
+        # --- NUEVA LÓGICA HÍBRIDA ---
         
-        trend_status = "Estable"
-        if bull_cross: trend_status = "🔄 GIRO ALCISTA"
-        elif bear_cross: trend_status = "🔄 GIRO BAJISTA"
-        elif signal == "LONG" and row['close'] < ema20: trend_status = "⚠️ DEBILIDAD"
-        elif signal == "SHORT" and row['close'] > ema20: trend_status = "⚠️ REBOTE"
-        elif regime == "TENDENCIA": trend_status = "✅ FUERTE"
-        elif regime == "RANGO": trend_status = "💤 LATERAL"
+        # 1. Definir Régimen (Tendencia vs Rango)
+        adx = row.get('ADX_14', 0)
+        ema200 = row.get('EMA_200', 0)
+        is_trending = adx > 25
+        
+        regime = "TENDENCIA" if is_trending else "RANGO"
 
+        # 2. Calcular Señal según Régimen
+        signal = "NEUTRO"
+
+        if is_trending:
+            # ESTRATEGIA DE TENDENCIA (Trend Following)
+            # Solo operamos a favor de la EMA 200
+            if row['close'] > ema200: # Tendencia Macro Alcista
+                if row['EMA_20'] > row['EMA_50'] and row['close'] > row.get('VWAP', 0):
+                    signal = "LONG"
+                    details.append("Tendencia Alcista (EMA+VWAP)")
+            
+            elif row['close'] < ema200: # Tendencia Macro Bajista
+                if row['EMA_20'] < row['EMA_50'] and row['close'] < row.get('VWAP', 0):
+                    signal = "SHORT"
+                    details.append("Tendencia Bajista (EMA+VWAP)")
+
+        else:
+            # ESTRATEGIA DE RANGO (Mean Reversion)
+            # Comprar barato, Vender caro
+            rsi = row.get('RSI', 50)
+            mfi = row.get('MFI', 50)
+            
+            if rsi < 30 and mfi < 30: # Sobreventa extrema
+                signal = "LONG"
+                details.append("Rebote en Rango (RSI Bajo)")
+            elif rsi > 70 and mfi > 70: # Sobrecompra extrema
+                signal = "SHORT"
+                details.append("Rechazo en Rango (RSI Alto)")
+
+        # Estado Tendencia Visual
+        trend_status = "Estable"
+        if row['close'] > ema200: trend_status = "↗️ MACRO ALCISTA"
+        else: trend_status = "↘️ MACRO BAJISTA"
+        
         atr_val = row.get('ATR', 0)
         candle_pat = row.get('candle_pat', 'Normal')
         
         return signal, atr_val, details, regime, trend_status, candle_pat
 
     def check_and_execute_auto(self, db_mgr, symbol, signal, strength, price, atr, size=1000.0):
+        # Lógica de ejecución automática (igual que antes)
         if strength != "DIAMOND": return False, "No Diamond"
-        
         last_trade_time_str = db_mgr.get_last_trade_time(symbol)
         if last_trade_time_str:
             last_trade_time = datetime.strptime(last_trade_time_str, "%Y-%m-%d %H:%M:%S")
@@ -174,46 +179,37 @@ class StrategyManager:
             return True, "Executed"
         return False, "DB Error"
 
-    # --- BACKTESTING FRANCOTIRADOR (DIAMANTE REAL) ---
+    # --- BACKTEST HÍBRIDO (V2) ---
     def run_backtest_pro(self, df, initial_capital=10000, fee_pct=0.001):
         if df is None or df.empty: return None, 0, 0
 
         bt = df.copy()
         
-        # === REGLAS DE ENTRADA: SOLO DIAMANTES ===
-        # 1. Tendencia EMA
-        cond_ema_long = bt['EMA_20'] > bt['EMA_50']
-        cond_ema_short = bt['EMA_20'] < bt['EMA_50']
+        # REGLAS HÍBRIDAS PARA EL BACKTEST
         
-        # 2. VWAP (Institucional)
-        cond_vwap_long = bt['close'] > bt['VWAP']
-        cond_vwap_short = bt['close'] < bt['VWAP']
+        # 1. Condiciones Generales
+        above_200 = bt['close'] > bt['EMA_200']
+        strong_trend = bt['ADX_14'] > 25
         
-        # 3. RSI (Sin sobrecompra/venta)
-        cond_rsi_long = (bt['RSI'] > 45) & (bt['RSI'] < 70)
-        cond_rsi_short = (bt['RSI'] < 55) & (bt['RSI'] > 30)
+        # 2. Señales de Tendencia (Trend Following)
+        trend_long = above_200 & strong_trend & (bt['EMA_20'] > bt['EMA_50']) & (bt['close'] > bt['VWAP'])
+        trend_short = (~above_200) & strong_trend & (bt['EMA_20'] < bt['EMA_50']) & (bt['close'] < bt['VWAP'])
         
-        # 4. ADX (FUERZA DE TENDENCIA - VITAL)
-        # Si ADX < 25, el mercado está plano y nos matan las comisiones. No operamos.
-        cond_adx = bt['ADX_14'] > 25 
-
-        # COMBINACIÓN FRANCOTIRADOR
-        bt['long_signal'] = cond_ema_long & cond_vwap_long & cond_rsi_long & cond_adx
-        bt['short_signal'] = cond_ema_short & cond_vwap_short & cond_rsi_short & cond_adx
+        # 3. Señales de Rango (Mean Reversion)
+        range_long = (~strong_trend) & (bt['RSI'] < 30) # Comprar suelo
+        range_short = (~strong_trend) & (bt['RSI'] > 70) # Vender techo
         
+        # Combinar Señales
         bt['signal'] = 0
-        bt.loc[bt['long_signal'], 'signal'] = 1
-        bt.loc[bt['short_signal'], 'signal'] = -1
+        bt.loc[trend_long | range_long, 'signal'] = 1
+        bt.loc[trend_short | range_short, 'signal'] = -1
         
-        # === CÁLCULO DE RETORNOS ===
+        # Retornos y Fees
         bt['market_return'] = bt['close'].pct_change()
         bt['strategy_return'] = bt['signal'].shift(1) * bt['market_return']
-        
-        # Comisiones (Cada vez que cambia la señal de 0 a 1 o -1, pagamos)
         bt['trades'] = bt['signal'].diff().abs().fillna(0)
         bt['strategy_return'] = bt['strategy_return'] - (bt['trades'] * fee_pct)
         
-        # Equity Curve
         bt['equity'] = initial_capital * (1 + bt['strategy_return']).cumprod()
         
         final_equity = bt['equity'].iloc[-1]
