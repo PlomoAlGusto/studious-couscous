@@ -1,155 +1,123 @@
-import pandas_ta as ta
 import pandas as pd
 import numpy as np
+import streamlit as st
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 
+# --- IMPORTACIÓN SEGURA DE LIBRERÍA TÉCNICA (Auto-detect) ---
+try:
+    # Intento 1: Nombre original
+    import pandas_ta as ta
+except ImportError:
+    try:
+        # Intento 2: Nombre de la versión Classic
+        import pandas_ta_classic as ta
+    except ImportError:
+        # Intento 3: Fallo total (No detener app, usar dummy)
+        st.error("⚠️ Error: Librería de Análisis Técnico no encontrada. Revisa requirements.txt")
+        class DummyTA:
+            def ema(self, *args, **kwargs): return pd.Series([0]*100)
+            def rsi(self, *args, **kwargs): return pd.Series([50]*100)
+            def atr(self, *args, **kwargs): return pd.Series([1]*100)
+            def adx(self, *args, **kwargs): return pd.DataFrame({'ADX_14': [0]*100})
+            def ichimoku(self, *args, **kwargs): return [pd.DataFrame(), pd.DataFrame()]
+        ta = DummyTA()
+# ------------------------------------------------------------
+
 class StrategyManager:
     def __init__(self):
-        self.model = None
         self.scaler = StandardScaler()
+        self.model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
+        self.is_model_trained = False
 
-    def calculate_indicators(self, df):
-        """Calcula indicadores técnicos usando pandas_ta-classic"""
+    def prepare_data(self, df):
         if df is None or df.empty: return df
         
-        # Copia para no afectar el original inmediatamente
-        df = df.copy()
+        d = df.copy()
 
-        # 1. EMAs
-        df['EMA_20'] = ta.ema(df['close'], length=20)
-        df['EMA_50'] = ta.ema(df['close'], length=50)
-
-        # 2. RSI & ATR
-        df['RSI'] = ta.rsi(df['close'], length=14)
-        df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
-
-        # 3. VWAP (Intento robusto)
+        # Indicadores usando el alias 'ta' (que ya sabemos que funciona)
         try:
-            if 'volume' in df.columns:
-                df.ta.vwap(append=True)
-                if 'VWAP_D' in df.columns: df.rename(columns={'VWAP_D': 'VWAP'}, inplace=True)
-        except:
-            pass
-        
-        # Fallback VWAP manual
-        if 'VWAP' not in df.columns:
-            vp = ((df['high'] + df['low'] + df['close']) / 3) * df['volume']
-            df['VWAP'] = vp.cumsum() / df['volume'].cumsum()
+            d['EMA_20'] = ta.ema(d['close'], length=20)
+            d['EMA_50'] = ta.ema(d['close'], length=50)
+            d['RSI'] = ta.rsi(d['close'], length=14)
+            d['ATR'] = ta.atr(d['high'], d['low'], d['close'], length=14)
+            
+            adx = ta.adx(d['high'], d['low'], d['close'], length=14)
+            if adx is not None and not adx.empty:
+                d = pd.concat([d, adx], axis=1)
 
-        # 4. ADX
-        try:
-            adx = ta.adx(df['high'], df['low'], df['close'], length=14)
-            if adx is not None:
-                df = pd.concat([df, adx], axis=1)
-                # Normalizar nombre de columna
-                if 'ADX_14' not in df.columns and 'ADX' in df.columns: 
-                    df['ADX_14'] = df['ADX']
-        except:
-            df['ADX_14'] = 0
+            # VWAP Manual (Por si la librería falla)
+            d['VWAP'] = (d['close'] * d['volume']).cumsum() / d['volume'].cumsum()
 
-        # 5. MFI & TSI
-        df['MFI'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
-        
-        try:
-            tsi = ta.tsi(df['close'], fast=13, slow=25)
-            if tsi is not None:
-                df = pd.concat([df, tsi], axis=1)
-                tsi_col = [c for c in df.columns if 'TSI' in c][0]
-                df['TSI'] = df[tsi_col]
-        except:
-            df['TSI'] = 0
+            ichi = ta.ichimoku(d['high'], d['low'], d['close'])
+            if ichi and len(ichi) > 0:
+                d = pd.concat([d, ichi[0]], axis=1)
+                
+        except Exception as e:
+            print(f"Error calculando indicadores: {e}")
 
-        return df.fillna(method='bfill').fillna(method='ffill')
+        return d
 
     def train_regime_model(self, df):
-        """Entrena el modelo de Machine Learning para detectar régimen"""
-        if len(df) < 100: return
-        
-        df_ml = df.copy()
-        df_ml['return'] = df_ml['close'].pct_change()
-        df_ml['vol'] = df_ml['return'].rolling(14).std()
-        
-        # Etiquetado: 1 (Tendencia Alcista), -1 (Bajista), 0 (Rango/Ruido)
-        df_ml['label'] = np.where(df_ml['return'].shift(-10) > df_ml['vol'], 1,
-                                 np.where(df_ml['return'].shift(-10) < -df_ml['vol'], -1, 0))
-        df_ml = df_ml.dropna()
-
-        features = ['vol', 'ADX_14', 'RSI']
-        valid_features = [f for f in features if f in df_ml.columns]
-        
-        if not valid_features: return
-
-        X = df_ml[valid_features]
-        y = df_ml['label']
-        
         try:
-            self.model = RandomForestClassifier(n_estimators=50, max_depth=3, random_state=42)
-            self.model.fit(self.scaler.fit_transform(X), y.astype('int'))
-        except Exception as e:
-            print(f"Error entrenando modelo: {e}")
-            self.model = None
+            df['ret'] = df['close'].pct_change()
+            df['vol'] = df['ret'].rolling(10).std()
+            
+            future_vol = df['vol'].shift(-5)
+            df['target'] = np.where(future_vol > df['vol'].quantile(0.6), 1, 0)
+            
+            data = df.dropna()
+            if len(data) > 100:
+                features = data[['RSI', 'ADX_14', 'vol']]
+                self.model.fit(features, data['target'])
+                self.is_model_trained = True
+        except: pass
 
-    def get_signal(self, df, filters):
-        """Genera la señal final basada en la estrategia"""
+    def get_signal(self, df, context_filters):
+        if df is None or len(df) < 50: return "NEUTRO", 0, [], "NEUTRO"
+
         row = df.iloc[-1]
-        
-        # Inicializar
-        signal = "NEUTRO"
         score = 0
-        max_score = 0
         details = []
-        regime = 0
 
-        # Predicción ML
-        if self.model:
+        if context_filters.get('use_ema'):
+            if row.get('EMA_20', 0) > row.get('EMA_50', 0):
+                score += 1
+                details.append("EMA Alcista")
+            else:
+                score -= 1
+                details.append("EMA Bajista")
+
+        if context_filters.get('use_vwap'):
+            if row['close'] > row.get('VWAP', 0):
+                score += 1
+            else:
+                score -= 1
+
+        regime = "NEUTRO"
+        if self.is_model_trained and context_filters.get('use_regime'):
             try:
-                vol = df['close'].pct_change().tail(14).std()
-                feats = [[vol, row.get('ADX_14', 0), row.get('RSI', 50)]]
-                regime = self.model.predict(self.scaler.transform(feats))[0]
-            except:
-                pass
+                last_feat = df[['RSI', 'ADX_14', 'vol']].iloc[[-1]].fillna(0)
+                pred = self.model.predict(last_feat)[0]
+                if pred == 0: 
+                    score = 0 
+                    details.append("⛔ ML: Rango Detectado")
+                    regime = "RANGO"
+                else:
+                    regime = "TENDENCIA"
+            except: pass
 
-        # Lógica de Puntuación
-        if filters.get('use_ema'):
-            max_score += 1
-            if row['EMA_20'] > row['EMA_50']:
-                score += 1
-                details.append("EMA: Bull")
-            else:
-                score -= 1
-                details.append("EMA: Bear")
+        signal = "NEUTRO"
+        if score >= 2: signal = "LONG"
+        elif score <= -2: signal = "SHORT"
 
-        if filters.get('use_vwap') and 'VWAP' in row:
-            max_score += 1
-            if row['close'] > row['VWAP']:
-                score += 1
-                details.append("VWAP: Bull")
-            else:
-                score -= 1
-                details.append("VWAP: Bear")
+        # Filtro RSI
+        rsi_val = row.get('RSI', 50)
+        if signal == "LONG" and rsi_val > 75: signal = "NEUTRO"
+        if signal == "SHORT" and rsi_val < 25: signal = "NEUTRO"
 
-        if filters.get('use_tsi') and 'TSI' in row:
-            max_score += 1
-            if row['TSI'] > 0:
-                score += 1
-                details.append("TSI: Bull")
-            else:
-                score -= 1
-                details.append("TSI: Bear")
+        atr_val = row.get('ATR', 0)
+        return signal, atr_val, details, regime
 
-        # Decisión Final
-        threshold = max_score * 0.4
-        if score > threshold: signal = "LONG"
-        elif score < -threshold: signal = "SHORT"
-
-        # Vetos
-        if filters.get('use_regime') and row.get('ADX_14', 0) < 20:
-            signal = "NEUTRO"
-            details.append("VETO: ADX Bajo")
-
-        if filters.get('use_rsi'):
-            if row['RSI'] > 70 and signal == "LONG": signal = "NEUTRO"
-            if row['RSI'] < 30 and signal == "SHORT": signal = "NEUTRO"
-
-        return signal, row['ATR'], details, regime
+    def run_backtest_vectorized(self, df):
+        return 0, 0, 0 # Desactivado temporalmente
