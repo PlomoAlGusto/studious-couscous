@@ -21,7 +21,7 @@ st.set_page_config(page_title="Quimera Pro", layout="wide", page_icon="🦁")
 setup_logging()
 init_nltk()
 
-# --- CSS BLINDADO ---
+# --- CSS ---
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; }
@@ -41,7 +41,6 @@ st.markdown("""
     .clock-open { background-color: rgba(50,255,50,0.1); } .clock-closed { background-color: rgba(255,255,255,0.05); }
     .ai-box-container { background-color:#161b22; border-top:3px solid #a371f7; padding:15px; border-radius:0 0 6px 6px; margin-bottom:20px; }
     .ai-row-item { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #30363d; }
-    .pos-header { font-size:14px; font-weight:bold; margin-bottom:10px; border-bottom:1px solid #333; padding-bottom:5px; display:block; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -67,8 +66,6 @@ def calculate_optimal_leverage(entry, sl):
 def calculate_floating_pnl(df_trades, current_price, current_symbol):
     if df_trades.empty: return df_trades
     mask_open = df_trades['status'] == 'OPEN'
-    # Solo actualizamos PnL de las monedas que estamos viendo o si tenemos precios (simplificado)
-    # Asumimos que current_price es del current_symbol
     for index, row in df_trades[mask_open].iterrows():
         if row['symbol'] == current_symbol:
             entry = row['entry']
@@ -139,7 +136,6 @@ def render_news_box(news):
     """
     return textwrap.dedent(html)
 
-# --- SIDEBAR ---
 with st.sidebar:
     st.title("🦁 QUIMERA PRO")
     display_market_sessions()
@@ -150,12 +146,14 @@ with st.sidebar:
     ticker_list = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     symbol = st.selectbox("🔍 Ver Gráfico Detallado", ticker_list)
     timeframe = st.selectbox("Timeframe", ["15m", "1h", "4h", "1d"])
+    
     with st.expander("⚙️ FILTROS", expanded=True):
         filters = {
             'use_ema': st.checkbox("Tendencia EMA", True),
             'use_vwap': st.checkbox("Filtro VWAP", True),
             'use_regime': st.checkbox("Filtro ML", True)
         }
+    
     auto_refresh = st.checkbox("🔄 AUTO-SCAN (60s)", False)
     st.markdown("---")
     enable_auto = st.toggle("🤖 AUTO-TRADE (Todos)", value=False)
@@ -166,7 +164,6 @@ with st.sidebar:
 
 if auto_refresh: st_autorefresh(interval=60000)
 
-# --- MAIN ---
 def main():
     data_mgr = DataManager()
     strat_mgr = StrategyManager()
@@ -230,6 +227,7 @@ def main():
         fig.add_trace(go.Candlestick(x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='Price'), row=1, col=1)
         if 'EMA_20' in df.columns: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['EMA_20'], line=dict(color='yellow', width=1), name='EMA 20'), row=1, col=1)
         if 'VWAP' in df.columns: fig.add_trace(go.Scatter(x=df['timestamp'], y=df['VWAP'], line=dict(color='orange', dash='dot'), name='VWAP'), row=1, col=1)
+        
         last_s1 = df['S1'].iloc[-1] if 'S1' in df.columns else 0
         last_r1 = df['R1'].iloc[-1] if 'R1' in df.columns else 0
         if last_s1 > 0: fig.add_hline(y=last_s1, line_dash="dot", line_color="#3fb950", annotation_text="Soporte")
@@ -239,25 +237,13 @@ def main():
         fig.update_layout(template="plotly_dark", height=500, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- POSICIONES Y PNL (CORREGIDO 'time' -> 'timestamp') ---
         trades_df = db_mgr.load_trades()
         if not trades_df.empty:
             trades_df = calculate_floating_pnl(trades_df, price, symbol)
             open_trades = trades_df[trades_df['status'] == 'OPEN']
-            
             if not open_trades.empty:
-                st.markdown("<span class='pos-header'>🟢 POSICIONES ACTIVAS (Live)</span>", unsafe_allow_html=True)
-                # Aquí usamos 'timestamp' que es el nombre correcto en la DB
-                cols_to_show = ['timestamp', 'symbol', 'type', 'entry', 'size', 'leverage', 'pnl']
-                # Filtramos solo columnas que existen para evitar errores si la DB es vieja
-                valid_cols = [c for c in cols_to_show if c in open_trades.columns]
-                
-                st.dataframe(
-                    open_trades[valid_cols].style.format({
-                        'entry': '${:,.2f}', 'size': '${:,.0f}', 'pnl': '${:,.2f}'
-                    }).applymap(lambda x: 'color: #00FF00' if x > 0 else 'color: #FF4444', subset=['pnl']),
-                    use_container_width=True
-                )
+                st.markdown("<span style='color:#3fb950; font-weight:bold'>🟢 POSICIONES ACTIVAS</span>", unsafe_allow_html=True)
+                st.dataframe(open_trades[['symbol', 'type', 'entry', 'pnl']].style.format({'entry': '{:.2f}', 'pnl': '{:.2f}'}), use_container_width=True)
 
         sl_dist = atr * 1.5
         sl = price - sl_dist if display_signal == "LONG" else price + sl_dist
@@ -297,20 +283,27 @@ def main():
 
     st.divider()
     
-    if not trades_df.empty:
-        st.subheader("📈 Evolución de la Cuenta")
-        closed_trades = trades_df[trades_df['status'] == 'CLOSED'].copy()
-        if not closed_trades.empty:
-            closed_trades['cumulative_pnl'] = closed_trades['pnl'].cumsum()
-            equity_data = pd.DataFrame({'timestamp': [closed_trades['timestamp'].iloc[0]], 'cumulative_pnl': [0]})
-            equity_data = pd.concat([equity_data, closed_trades[['timestamp', 'cumulative_pnl']]])
-            fig_eq = px.line(equity_data, x='timestamp', y='cumulative_pnl', title="Ganancias Acumuladas (USDT)")
-            fig_eq.update_traces(line_color='#00FF00', fill='tozeroy')
-            fig_eq.update_layout(template="plotly_dark", height=300)
-            st.plotly_chart(fig_eq, use_container_width=True)
-
-        st.subheader("📚 Historial Completo")
-        st.dataframe(trades_df.style.format({'entry': '{:.2f}', 'pnl': '{:.2f}'}).applymap(lambda x: 'color: #00FF00' if x > 0 else 'color: #FF4444' if x < 0 else '', subset=['pnl']), use_container_width=True)
+    tab_pos, tab_bt, tab_hist = st.tabs(["📊 POSICIONES", "🧪 BACKTEST", "📈 RENDIMIENTO"])
+    
+    with tab_bt:
+        st.markdown("### 🧪 Backtest (ML + Vectorizado)")
+        if st.button("Ejecutar Backtest"):
+            # AHORA RECOGEMOS LOS 5 VALORES
+            ret, count, wr, sharpe, max_dd = strat_mgr.run_backtest_vectorized(df)
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Retorno", f"{ret:.2%}")
+            c2.metric("Trades", int(count))
+            c3.metric("Win Rate", f"{wr:.1%}")
+            c4.metric("Sharpe", f"{sharpe:.2f}")
+            c5.metric("Max DD", f"{max_dd:.2%}")
+    
+    with tab_hist:
+        if not trades_df.empty:
+            closed = trades_df[trades_df['status'] == 'CLOSED']
+            if not closed.empty:
+                fig = px.line(closed, x='timestamp', y='pnl', title="Curva de Equity")
+                st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(trades_df)
 
 if __name__ == "__main__":
     main()
