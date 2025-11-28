@@ -3,7 +3,7 @@ import numpy as np
 import streamlit as st
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from datetime import datetime, timedelta  # <--- ¡ESTA ERA LA LÍNEA QUE FALTABA!
+from datetime import datetime, timedelta 
 
 # --- IMPORTACIÓN SEGURA ---
 try:
@@ -43,7 +43,6 @@ class StrategyManager:
 
     def prepare_data(self, df):
         if df is None or df.empty: return df
-        
         d = df.copy()
 
         # 1. LIBRERÍA
@@ -53,25 +52,21 @@ class StrategyManager:
             d['RSI'] = ta.rsi(d['close'], length=14)
             d['ATR'] = ta.atr(d['high'], d['low'], d['close'], length=14)
             d['MFI'] = ta.mfi(d['high'], d['low'], d['close'], d['volume'], length=14)
-            
             adx = ta.adx(d['high'], d['low'], d['close'], length=14)
-            if adx is not None and not adx.empty:
-                d = pd.concat([d, adx], axis=1)
+            if adx is not None and not adx.empty: d = pd.concat([d, adx], axis=1)
         except: pass
 
         # 2. MANUALES
         d['TSI'] = self.calculate_manual_tsi(d)
-
         try:
             d['range_pct'] = ((d['high'] - d['low']) / d['low']) * 100
             d['ADR'] = d['range_pct'].rolling(window=14).mean()
         except: d['ADR'] = 0
-
         try:
             d['VWAP'] = (d['close'] * d['volume']).cumsum() / d['volume'].cumsum()
         except: d['VWAP'] = d['close']
 
-        # 3. PIVOTS
+        # 3. PIVOTS & LIMPIEZA
         high = d['high'].rolling(1).max()
         low = d['low'].rolling(1).min()
         close = d['close']
@@ -89,7 +84,6 @@ class StrategyManager:
             df['vol'] = df['ret'].rolling(10).std()
             future_vol = df['vol'].shift(-5)
             df['target'] = np.where(future_vol > df['vol'].quantile(0.6), 1, 0)
-            
             data = df.dropna()
             cols = [c for c in ['RSI', 'ADX_14', 'vol'] if c in data.columns]
             if len(data) > 50 and cols:
@@ -98,16 +92,15 @@ class StrategyManager:
         except: pass
 
     def get_signal(self, df, context_filters):
-        if df is None or len(df) < 50: return "NEUTRO", 0, [], "NEUTRO", "Sin Datos"
+        if df is None or len(df) < 50: return "NEUTRO", 0, [], "NEUTRO", "Sin Datos", "Ninguno"
 
         row = df.iloc[-1]
         prev_row = df.iloc[-2]
         score = 0
         details = []
 
-        ema20 = row.get('EMA_20', 0)
-        ema50 = row.get('EMA_50', 0)
-        
+        # Indicadores
+        ema20 = row.get('EMA_20', 0); ema50 = row.get('EMA_50', 0)
         if context_filters.get('use_ema'):
             if ema20 > ema50: score += 1; details.append("EMA Alcista")
             else: score -= 1; details.append("EMA Bajista")
@@ -117,6 +110,7 @@ class StrategyManager:
             if row['close'] > vwap: score += 1
             else: score -= 1
 
+        # ML Regime
         regime = "NEUTRO"
         if self.is_model_trained and context_filters.get('use_regime'):
             try:
@@ -127,16 +121,18 @@ class StrategyManager:
                     else: regime = "TENDENCIA"
             except: pass
 
+        # Señal
         signal = "NEUTRO"
         if score >= 2: signal = "LONG"
         elif score <= -2: signal = "SHORT"
 
+        # RSI
         rsi = row.get('RSI', 50)
         if signal == "LONG" and rsi > 75: signal = "NEUTRO"
         if signal == "SHORT" and rsi < 25: signal = "NEUTRO"
 
-        prev_ema20 = prev_row.get('EMA_20', 0)
-        prev_ema50 = prev_row.get('EMA_50', 0)
+        # --- CAMBIO DE TENDENCIA Y PATRONES (NUEVO) ---
+        prev_ema20 = prev_row.get('EMA_20', 0); prev_ema50 = prev_row.get('EMA_50', 0)
         bull_cross = prev_ema20 <= prev_ema50 and ema20 > ema50
         bear_cross = prev_ema20 >= prev_ema50 and ema20 < ema50
         
@@ -148,65 +144,49 @@ class StrategyManager:
         elif regime == "TENDENCIA": trend_status = "✅ FUERTE"
         elif regime == "RANGO": trend_status = "💤 LATERAL"
 
+        # --- DETECCIÓN DE PATRONES DE VELAS (SIMPLE) ---
+        candle_pat = "Sin Patrón"
+        # Bullish Engulfing
+        if (prev_row['close'] < prev_row['open']) and (row['close'] > row['open']) and \
+           (row['close'] > prev_row['open']) and (row['open'] < prev_row['close']):
+            candle_pat = "🕯️ Bullish Engulfing"
+        # Bearish Engulfing
+        elif (prev_row['close'] > prev_row['open']) and (row['close'] < row['open']) and \
+             (row['close'] < prev_row['open']) and (row['open'] > prev_row['close']):
+            candle_pat = "🕯️ Bearish Engulfing"
+        
         atr_val = row.get('ATR', 0)
-        return signal, atr_val, details, regime, trend_status
+        # AHORA DEVUELVE 6 VALORES (incluyendo candle_pat)
+        return signal, atr_val, details, regime, trend_status, candle_pat
 
-    # --- NUEVA FUNCIÓN DE AUTO-TRADE BLINDADA ---
     def check_and_execute_auto(self, db_mgr, symbol, signal, strength, price, atr):
-        """
-        Ejecuta operaciones automáticas si se cumplen condiciones estrictas:
-        1. Señal es DIAMANTE.
-        2. No hay operación abierta reciente en el mismo sentido (evitar spam).
-        """
         if strength != "DIAMOND" or signal == "NEUTRO":
             return False, "No es señal diamante"
 
-        # Cargar últimos trades para evitar duplicados en segundos
         df_trades = db_mgr.load_trades()
         if not df_trades.empty:
             last_trade = df_trades.iloc[0]
-            last_time_str = last_trade['timestamp']
             try:
-                # Parsear fecha (ajustar formato si es necesario)
-                last_trade_time = datetime.strptime(last_time_str, "%Y-%m-%d %H:%M:%S")
-                time_diff = datetime.now() - last_trade_time
-                # Si hace menos de 5 minutos del último trade, ignoramos
-                if time_diff.total_seconds() < 300: 
-                    return False, "Trade reciente detectado (Cooldown)"
-            except:
-                pass # Si falla la fecha, permitimos el trade por seguridad
+                last_trade_time = datetime.strptime(last_trade['timestamp'], "%Y-%m-%d %H:%M:%S")
+                if (datetime.now() - last_trade_time).total_seconds() < 300: 
+                    return False, "Cooldown activo"
+            except: pass
 
-        # Calcular parámetros de riesgo
         sl_dist = atr * 1.5
         sl = price - sl_dist if signal == "LONG" else price + sl_dist
         tp1 = price + sl_dist if signal == "LONG" else price - sl_dist
         
-        # Leverage seguro
         dist_pct = abs(price - sl) / price if price > 0 else 0
         lev = int(0.02 / dist_pct) if dist_pct > 0 else 1
         lev = max(1, min(lev, 50))
 
-        # Crear orden
         trade = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "symbol": symbol,
-            "type": signal,
-            "entry": price,
-            "size": 1000.0, # Tamaño base para auto-trade
-            "leverage": lev,
-            "sl": sl,
-            "tp1": tp1,
-            "tp2": 0,
-            "tp3": 0,
-            "status": "OPEN",
-            "pnl": 0.0,
-            "reason": "AUTO-DIAMOND BOT",
-            "candles_held": 0,
-            "atr_entry": atr
+            "symbol": symbol, "type": signal, "entry": price, "size": 1000.0,
+            "leverage": lev, "sl": sl, "tp1": tp1, "tp2": 0, "tp3": 0,
+            "status": "OPEN", "pnl": 0.0, "reason": "AUTO-DIAMOND", "candles_held": 0, "atr_entry": atr
         }
-        
         db_mgr.add_trade(trade)
         return True, f"💎 Auto-Trade {signal} Ejecutado"
 
-    def run_backtest_vectorized(self, df):
-        return 0, 0, 0
+    def run_backtest_vectorized(self, df): return 0, 0, 0
