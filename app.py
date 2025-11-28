@@ -6,6 +6,7 @@ from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timezone
 
+# --- IMPORTACIONES ---
 try:
     from config import config
     from database import TradeManager
@@ -13,18 +14,20 @@ try:
     from strategy import StrategyManager
     from utils import setup_logging, init_nltk, send_telegram_alert
 except ImportError as e:
-    st.error(f"Error crítico: {e}"); st.stop()
+    st.error(f"Error crítico: {e}")
+    st.stop()
 
 st.set_page_config(page_title="Quimera Pro", layout="wide", page_icon="🦁")
 setup_logging()
 init_nltk()
 
+# --- CSS BLINDADO ---
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; }
     .source-tag { background-color: #21262d; color: #8b949e; padding: 4px 8px; border-radius: 4px; font-size: 11px; border: 1px solid #30363d; font-family: monospace; }
     .symbol-tag { background-color: #1f6feb; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; font-family: monospace; }
-    div.trade-card-box { background-color: #0d1117 !important; border: 1px solid #30363d !important; border-radius: 10px !important; padding: 25px !important; margin-bottom: 20px !important; box-shadow: 0 8px 24px rgba(0,0,0,0.6) !important; }
+    div.trade-card-box { background-color: #0d1117 !important; border: 1px solid #30363d !important; border-radius: 10px !important; padding: 25px !important; margin-top: 15px !important; margin-bottom: 20px !important; box-shadow: 0 8px 24px rgba(0,0,0,0.6) !important; }
     .prob-track { width: 100%; height: 10px; background-color: #21262d; border-radius: 5px; margin: 10px 0 20px 0; overflow: hidden; }
     .price-grid-row { display: flex; justify-content: space-between; margin-bottom: 15px; gap: 10px; }
     .price-col { flex: 1; text-align: center; }
@@ -116,13 +119,22 @@ with st.sidebar:
     st.divider()
     symbol = st.text_input("Ticker", "BTC/USDT").upper()
     timeframe = st.selectbox("Timeframe", ["15m", "1h", "4h", "1d"])
+    
     with st.expander("⚙️ FILTROS", expanded=True):
         filters = {
             'use_ema': st.checkbox("Tendencia EMA", True),
             'use_vwap': st.checkbox("Filtro VWAP", True),
             'use_regime': st.checkbox("Filtro ML", True)
         }
+    
     auto_refresh = st.checkbox("🔄 AUTO-SCAN (60s)", False)
+    
+    # --- INTERRUPTOR DE AUTO-TRADING ---
+    st.markdown("---")
+    enable_auto = st.toggle("🤖 AUTO-TRADE (Diamante)", value=False)
+    if enable_auto:
+        st.caption("⚠️ El bot ejecutará órdenes DIAMANTE automáticamente.")
+
     if st.button("🗑️ RESET"): TradeManager().reset_account(); st.rerun()
     st.markdown("---")
     if config.TELEGRAM_TOKEN: st.markdown("<div style='text-align:center;color:#00FF00;border:1px solid green;padding:5px;border-radius:5px;'>🔔 TELEGRAM: ONLINE</div>", unsafe_allow_html=True)
@@ -145,7 +157,6 @@ def main():
 
     df = strat_mgr.prepare_data(df)
     strat_mgr.train_regime_model(df)
-    # AHORA UNPACKEAMOS 6 VALORES
     signal_raw, atr, details, regime, trend_status, candle_pat = strat_mgr.get_signal(df, filters)
     price = df['close'].iloc[-1]
     
@@ -160,7 +171,15 @@ def main():
     prob = 85 if signal_strength == "DIAMOND" else 60
     if regime == "TENDENCIA": prob += 5
 
+    # --- AUTO TRADE LOGIC ---
+    if enable_auto:
+        executed, msg = strat_mgr.check_and_execute_auto(db_mgr, symbol, display_signal, signal_strength, price, atr)
+        if executed:
+            send_telegram_alert(symbol, f"AUTO: {display_signal}", price, 0, 0, 0) # Simplificado
+            st.toast(msg, icon="💎")
+
     col1, col2 = st.columns([2.5, 1])
+
     with col1:
         st.markdown(f"<div style='display:flex; gap:10px; margin-bottom:15px;'><span class='symbol-tag'>{symbol}</span><span class='source-tag'>📡 YAHOO</span><span class='source-tag'>⏱️ {timeframe}</span></div>", unsafe_allow_html=True)
         c1, c2, c3, c4 = st.columns(4)
@@ -184,23 +203,43 @@ def main():
         fig.update_layout(template="plotly_dark", height=500, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
-        sl_dist = atr * 1.5
-        sl = price - sl_dist if display_signal == "LONG" else price + sl_dist
-        tp1 = price + sl_dist if display_signal == "LONG" else price - sl_dist
-        tp2 = price + (sl_dist * 2) if display_signal == "LONG" else price - (sl_dist * 2)
-        tp3 = price + (sl_dist * 3.5) if display_signal == "LONG" else price - (sl_dist * 3.5)
-        opt_lev = calculate_optimal_leverage(price, sl)
+        # --- PESTAÑAS (RESTAURADAS) ---
+        tab_exec, tab_backtest, tab_history = st.tabs(["⚡ EJECUCIÓN", "🧪 BACKTEST", "📜 HISTORIAL"])
 
-        st.markdown(render_trade_card(display_signal, signal_strength, price, sl, tp1, tp2, tp3, opt_lev, prob), unsafe_allow_html=True)
+        with tab_exec:
+            sl_dist = atr * 1.5
+            sl = price - sl_dist if display_signal == "LONG" else price + sl_dist
+            tp1 = price + sl_dist if display_signal == "LONG" else price - sl_dist
+            tp2 = price + (sl_dist * 2) if display_signal == "LONG" else price - (sl_dist * 2)
+            tp3 = price + (sl_dist * 3.5) if display_signal == "LONG" else price - (sl_dist * 3.5)
+            opt_lev = calculate_optimal_leverage(price, sl)
 
-        c_btn1, c_btn2 = st.columns([1, 2])
-        size = c_btn1.number_input("Inversión USDT", value=1000.0)
-        btn_type = "primary" if signal_strength == "DIAMOND" else "secondary"
-        if c_btn2.button(f"🚀 EJECUTAR {display_signal}", use_container_width=True, type=btn_type):
-            trade = {"timestamp": str(datetime.now()), "symbol": symbol, "type": display_signal, "entry": price, "size": size, "leverage": opt_lev, "sl": sl, "tp1": tp1, "tp2": 0, "tp3": 0, "status": "OPEN", "pnl": 0.0, "reason": f"{signal_strength}", "candles_held": 0, "atr_entry": atr}
-            db_mgr.add_trade(trade)
-            with st.spinner("Notificando..."): send_telegram_alert(symbol, display_signal, price, sl, tp1, opt_lev)
-            st.success("✅ Orden Enviada")
+            st.markdown(render_trade_card(display_signal, signal_strength, price, sl, tp1, tp2, tp3, opt_lev, prob), unsafe_allow_html=True)
+
+            c_btn1, c_btn2 = st.columns([1, 2])
+            size = c_btn1.number_input("Inversión USDT", value=1000.0)
+            btn_type = "primary" if signal_strength == "DIAMOND" else "secondary"
+            if c_btn2.button(f"🚀 EJECUTAR {display_signal}", use_container_width=True, type=btn_type):
+                trade = {"timestamp": str(datetime.now()), "symbol": symbol, "type": display_signal, "entry": price, "size": size, "leverage": opt_lev, "sl": sl, "tp1": tp1, "tp2": 0, "tp3": 0, "status": "OPEN", "pnl": 0.0, "reason": f"{signal_strength}", "candles_held": 0, "atr_entry": atr}
+                db_mgr.add_trade(trade)
+                with st.spinner("Notificando..."): send_telegram_alert(symbol, display_signal, price, sl, tp1, opt_lev)
+                st.success("✅ Orden Enviada")
+        
+        with tab_backtest:
+            st.subheader("🧪 Backtest Rápido (Vectorizado)")
+            if st.button("Ejecutar Backtest Histórico"):
+                ret, trades, wr = strat_mgr.run_backtest_vectorized(df)
+                col_b1, col_b2, col_b3 = st.columns(3)
+                col_b1.metric("Retorno Total", f"{ret:.2%}")
+                col_b2.metric("Trades Totales", int(trades))
+                col_b3.metric("Win Rate", f"{wr:.1%}")
+                st.info("Backtest basado en estrategia simple de cruce EMA + VWAP sobre los datos cargados.")
+
+        with tab_history:
+            st.subheader("📚 Libro de Órdenes")
+            df_trades = db_mgr.load_trades()
+            if not df_trades.empty: st.dataframe(df_trades, use_container_width=True)
+            else: st.info("No hay operaciones.")
 
     with col2:
         rsi_val = df['RSI'].iloc[-1]
@@ -212,10 +251,6 @@ def main():
         
         st.markdown(render_quimera_ai(regime, atr, fr, fng_val, rsi_val, trend_str, adr_val, tsi_val, mfi_val, trend_status, candle_pat), unsafe_allow_html=True)
         st.markdown(render_news_box(news), unsafe_allow_html=True)
-
-    st.divider()
-    df_trades = db_mgr.load_trades()
-    if not df_trades.empty: st.dataframe(df_trades, use_container_width=True)
 
 if __name__ == "__main__":
     main()

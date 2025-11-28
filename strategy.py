@@ -3,7 +3,7 @@ import numpy as np
 import streamlit as st
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from datetime import datetime, timedelta 
+from datetime import datetime, timedelta
 
 # --- IMPORTACIÓN SEGURA ---
 try:
@@ -53,7 +53,8 @@ class StrategyManager:
             d['ATR'] = ta.atr(d['high'], d['low'], d['close'], length=14)
             d['MFI'] = ta.mfi(d['high'], d['low'], d['close'], d['volume'], length=14)
             adx = ta.adx(d['high'], d['low'], d['close'], length=14)
-            if adx is not None and not adx.empty: d = pd.concat([d, adx], axis=1)
+            if adx is not None and not adx.empty:
+                d = pd.concat([d, adx], axis=1)
         except: pass
 
         # 2. MANUALES
@@ -66,7 +67,7 @@ class StrategyManager:
             d['VWAP'] = (d['close'] * d['volume']).cumsum() / d['volume'].cumsum()
         except: d['VWAP'] = d['close']
 
-        # 3. PIVOTS & LIMPIEZA
+        # 3. PIVOTS
         high = d['high'].rolling(1).max()
         low = d['low'].rolling(1).min()
         close = d['close']
@@ -99,8 +100,9 @@ class StrategyManager:
         score = 0
         details = []
 
-        # Indicadores
-        ema20 = row.get('EMA_20', 0); ema50 = row.get('EMA_50', 0)
+        ema20 = row.get('EMA_20', 0)
+        ema50 = row.get('EMA_50', 0)
+        
         if context_filters.get('use_ema'):
             if ema20 > ema50: score += 1; details.append("EMA Alcista")
             else: score -= 1; details.append("EMA Bajista")
@@ -110,7 +112,6 @@ class StrategyManager:
             if row['close'] > vwap: score += 1
             else: score -= 1
 
-        # ML Regime
         regime = "NEUTRO"
         if self.is_model_trained and context_filters.get('use_regime'):
             try:
@@ -121,18 +122,16 @@ class StrategyManager:
                     else: regime = "TENDENCIA"
             except: pass
 
-        # Señal
         signal = "NEUTRO"
         if score >= 2: signal = "LONG"
         elif score <= -2: signal = "SHORT"
 
-        # RSI
         rsi = row.get('RSI', 50)
         if signal == "LONG" and rsi > 75: signal = "NEUTRO"
         if signal == "SHORT" and rsi < 25: signal = "NEUTRO"
 
-        # --- CAMBIO DE TENDENCIA Y PATRONES (NUEVO) ---
-        prev_ema20 = prev_row.get('EMA_20', 0); prev_ema50 = prev_row.get('EMA_50', 0)
+        prev_ema20 = prev_row.get('EMA_20', 0)
+        prev_ema50 = prev_row.get('EMA_50', 0)
         bull_cross = prev_ema20 <= prev_ema50 and ema20 > ema50
         bear_cross = prev_ema20 >= prev_ema50 and ema20 < ema50
         
@@ -144,34 +143,34 @@ class StrategyManager:
         elif regime == "TENDENCIA": trend_status = "✅ FUERTE"
         elif regime == "RANGO": trend_status = "💤 LATERAL"
 
-        # --- DETECCIÓN DE PATRONES DE VELAS (SIMPLE) ---
         candle_pat = "Sin Patrón"
-        # Bullish Engulfing
         if (prev_row['close'] < prev_row['open']) and (row['close'] > row['open']) and \
            (row['close'] > prev_row['open']) and (row['open'] < prev_row['close']):
             candle_pat = "🕯️ Bullish Engulfing"
-        # Bearish Engulfing
         elif (prev_row['close'] > prev_row['open']) and (row['close'] < row['open']) and \
              (row['close'] < prev_row['open']) and (row['open'] > prev_row['close']):
             candle_pat = "🕯️ Bearish Engulfing"
         
         atr_val = row.get('ATR', 0)
-        # AHORA DEVUELVE 6 VALORES (incluyendo candle_pat)
         return signal, atr_val, details, regime, trend_status, candle_pat
 
     def check_and_execute_auto(self, db_mgr, symbol, signal, strength, price, atr):
+        """Ejecuta operaciones automáticas si la señal es DIAMANTE"""
         if strength != "DIAMOND" or signal == "NEUTRO":
-            return False, "No es señal diamante"
+            return False, None
 
+        # Cargar últimos trades para evitar spam
         df_trades = db_mgr.load_trades()
         if not df_trades.empty:
             last_trade = df_trades.iloc[0]
             try:
                 last_trade_time = datetime.strptime(last_trade['timestamp'], "%Y-%m-%d %H:%M:%S")
+                # Cooldown de 5 minutos
                 if (datetime.now() - last_trade_time).total_seconds() < 300: 
-                    return False, "Cooldown activo"
+                    return False, None
             except: pass
 
+        # Gestión de Riesgo Automática
         sl_dist = atr * 1.5
         sl = price - sl_dist if signal == "LONG" else price + sl_dist
         tp1 = price + sl_dist if signal == "LONG" else price - sl_dist
@@ -186,7 +185,30 @@ class StrategyManager:
             "leverage": lev, "sl": sl, "tp1": tp1, "tp2": 0, "tp3": 0,
             "status": "OPEN", "pnl": 0.0, "reason": "AUTO-DIAMOND", "candles_held": 0, "atr_entry": atr
         }
+        
         db_mgr.add_trade(trade)
-        return True, f"💎 Auto-Trade {signal} Ejecutado"
+        return True, trade
 
-    def run_backtest_vectorized(self, df): return 0, 0, 0
+    def run_backtest_vectorized(self, df):
+        """Backtest rápido vectorizado para la pestaña de Backtest"""
+        if df is None or df.empty: return 0, 0, 0
+        
+        d = df.copy()
+        d['signal'] = 0
+        
+        # Reglas Simples para Backtest
+        d.loc[(d['EMA_20'] > d['EMA_50']) & (d['close'] > d['VWAP']), 'signal'] = 1
+        d.loc[(d['EMA_20'] < d['EMA_50']) & (d['close'] < d['VWAP']), 'signal'] = -1
+        
+        # Calcular retornos
+        d['market_return'] = d['close'].pct_change()
+        d['strategy_return'] = d['signal'].shift(1) * d['market_return']
+        
+        total_return = d['strategy_return'].sum()
+        trades_count = d['signal'].diff().abs().sum() / 2
+        
+        winning_trades = len(d[d['strategy_return'] > 0])
+        total_trades = len(d[d['strategy_return'] != 0])
+        win_rate = winning_trades / total_trades if total_trades > 0 else 0
+        
+        return total_return, trades_count, win_rate
