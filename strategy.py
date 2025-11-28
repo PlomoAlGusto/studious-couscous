@@ -5,7 +5,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 from datetime import datetime, timedelta
 # Importaciones ML
-from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
+from sklearn.model_selection import TimeSeriesSplit
 from imblearn.over_sampling import SMOTE
 from xgboost import XGBClassifier
 
@@ -23,7 +23,7 @@ except ImportError:
             def adx(self, *args, **kwargs): return pd.DataFrame({'ADX_14': [0]*len(args[0])})
             def tsi(self, *args, **kwargs): return pd.Series([0]*len(args[0]))
             def mfi(self, *args, **kwargs): return pd.Series([50]*len(args[0]))
-            def cdl_pattern(self, *args, **kwargs): return pd.Series([0]*len(args[0]))
+            def ichimoku(self, *args, **kwargs): return [pd.DataFrame(), pd.DataFrame()]
         ta = DummyTA()
 
 class StrategyManager:
@@ -49,42 +49,58 @@ class StrategyManager:
         if df is None or df.empty: return df
         d = df.copy()
 
-        # 1. LIBRERÍA
+        # 1. LIBRERÍA TÉCNICA
         try:
             d['EMA_20'] = ta.ema(d['close'], length=20)
             d['EMA_50'] = ta.ema(d['close'], length=50)
             d['RSI'] = ta.rsi(d['close'], length=14)
             d['ATR'] = ta.atr(d['high'], d['low'], d['close'], length=14)
             d['MFI'] = ta.mfi(d['high'], d['low'], d['close'], d['volume'], length=14)
+            
+            # ADX (Vital para tu filtro)
             adx = ta.adx(d['high'], d['low'], d['close'], length=14)
-            if adx is not None and not adx.empty: d = pd.concat([d, adx], axis=1)
+            if adx is not None and not adx.empty:
+                d = pd.concat([d, adx], axis=1)
+                # Normalizar nombre columna
+                if 'ADX_14' not in d.columns: d['ADX_14'] = d.iloc[:, -1]
         except: pass
 
-        # 2. MANUALES (TSI, ADR, VWAP)
+        # 2. CÁLCULOS MANUALES
         d['TSI'] = self.calculate_manual_tsi(d)
+        
+        # ADR Manual
         try:
             d['range_pct'] = ((d['high'] - d['low']) / d['low']) * 100
             d['ADR'] = d['range_pct'].rolling(window=14).mean()
         except: d['ADR'] = 0
-        try:
-            d['VWAP'] = (d['close'] * d['volume']).cumsum() / d['volume'].cumsum()
-        except: d['VWAP'] = d['close']
 
-        # 3. NUEVOS FILTROS QUANT (CVD Proxy & SFP)
+        # --- MEJORA: VWAP DIARIO (ANCHORED VWAP) ---
+        # Reiniciamos el VWAP cada día. Esto es como lo ven los algoritmos institucionales.
         try:
-            # CVD PROXY (Money Flow Multiplier)
-            # (Close - Low) - (High - Close) / (High - Low) * Volume
-            mrv = ((d['close'] - d['low']) - (d['high'] - d['close'])) / (d['high'] - d['low'])
-            mrv = mrv.fillna(0)
-            d['FLOW_VOL'] = mrv * d['volume']
-            d['CVD_PROXY'] = d['FLOW_VOL'].cumsum() # Cumulative Volume Delta simulado
+            # Aseguramos que timestamp es datetime
+            if not pd.api.types.is_datetime64_any_dtype(d['timestamp']):
+                d['timestamp'] = pd.to_datetime(d['timestamp'])
             
-            # SFP (Swing Failure Pattern) - Detectar Liquidez
-            # Buscamos fractales (máximos locales de 5 velas)
-            d['swing_high'] = d['high'].rolling(5).max()
-            d['swing_low'] = d['low'].rolling(5).min()
-        except: pass
+            d['date_group'] = d['timestamp'].dt.date
+            
+            # Cálculo eficiente con GroupBy
+            def vwap_func(x):
+                vol = x['volume'].replace(0, 1) # Evitar div/0
+                return (x['close'] * x['volume']).cumsum() / vol.cumsum()
 
+            # Aplicamos y reseteamos el índice para mantener alineación
+            d['VWAP'] = d.groupby('date_group', group_keys=False).apply(vwap_func)
+            # Si groupby devuelve multiindex, lo aplanamos (parche seguridad)
+            if isinstance(d['VWAP'].index, pd.MultiIndex):
+                d['VWAP'] = d['VWAP'].reset_index(level=0, drop=True)
+                
+        except Exception as e:
+            # Fallback al acumulado total si falla el diario
+            # print(f"VWAP Error: {e}")
+            d['VWAP'] = (d['close'] * d['volume']).cumsum() / d['volume'].cumsum()
+
+        # Limpieza
+        if 'date_group' in d.columns: d.drop(columns=['date_group'], inplace=True)
         d.fillna(method='bfill', inplace=True)
         d.fillna(0, inplace=True)
         return d
@@ -95,9 +111,11 @@ class StrategyManager:
             df['vol'] = df['ret'].rolling(10).std()
             future_ret = df['ret'].shift(-1)
             df['target'] = np.where(future_ret > 0.001, 1, np.where(future_ret < -0.001, -1, 0))
+            
             data = df.dropna()
             cols = ['RSI', 'ADX_14', 'vol', 'TSI', 'MFI', 'ATR']
             valid_cols = [c for c in cols if c in data.columns]
+            
             if len(data) > 100 and valid_cols:
                 smote = SMOTE()
                 X_res, y_res = smote.fit_resample(data[valid_cols], data['target'])
@@ -114,109 +132,78 @@ class StrategyManager:
         score = 0
         details = []
 
-        # 1. ESTRATEGIA BASE
         ema20 = row.get('EMA_20', 0); ema50 = row.get('EMA_50', 0)
-        if context_filters.get('use_ema'):
-            if ema20 > ema50: score += 1; details.append("EMA Alcista")
-            else: score -= 1; details.append("EMA Bajista")
+        adx = row.get('ADX_14', 0)
 
+        # 1. ESTRATEGIA (Con Filtro ADX)
+        if context_filters.get('use_ema'):
+            if ema20 > ema50: 
+                score += 1; details.append("EMA Alcista")
+            else: 
+                score -= 1; details.append("EMA Bajista")
+
+        # 2. VWAP
         vwap = row.get('VWAP', row['close'])
         if context_filters.get('use_vwap'):
             if row['close'] > vwap: score += 1
             else: score -= 1
 
-        # 2. ORDER FLOW & LIQUIDEZ (NUEVO)
-        # Si el precio sube pero el CVD baja = Divergencia Bajista (Trampa)
-        try:
-            price_trend = row['close'] > df.iloc[-5]['close']
-            cvd_trend = row['CVD_PROXY'] > df.iloc[-5]['CVD_PROXY']
-            
-            if price_trend and not cvd_trend:
-                score -= 1
-                details.append("⚠️ Div. CVD (Trampa Alcista)")
-            elif not price_trend and cvd_trend:
-                score += 1
-                details.append("⚠️ Div. CVD (Trampa Bajista)")
-        except: pass
-
-        # 3. SFP (SWING FAILURE PATTERN) - FAKEOUTS
-        # Si el precio rompió el máximo anterior pero cerró abajo = SFP Bearish
-        sfp_signal = "Ninguno"
-        try:
-            last_swing_high = df.iloc[-10:-2]['high'].max() # Maximo reciente
-            last_swing_low = df.iloc[-10:-2]['low'].min()   # Minimo reciente
-            
-            if row['high'] > last_swing_high and row['close'] < last_swing_high:
-                score -= 2 # Fuerte señal de venta
-                sfp_signal = "🐻 SFP Bearish (Fakeout)"
-                details.append("Fakeout Arriba")
-            
-            if row['low'] < last_swing_low and row['close'] > last_swing_low:
-                score += 2 # Fuerte señal de compra
-                sfp_signal = "🐂 SFP Bullish (Fakeout)"
-                details.append("Fakeout Abajo")
-        except: pass
-
-        # 4. ML REGIME
+        # 3. ML
         regime = "NEUTRO"
         if self.is_model_trained and context_filters.get('use_regime'):
             try:
                 cols = ['RSI', 'ADX_14', 'vol', 'TSI', 'MFI', 'ATR']
-                valid_cols = [c for c in cols if c in df.columns]
-                if valid_cols:
-                    last_data = df[valid_cols].iloc[[-1]].fillna(0)
-                    rf = self.model.predict(last_data)[0]
-                    xgb = self.xgb_model.predict(last_data)[0]
+                valid = [c for c in cols if c in df.columns]
+                if valid:
+                    last = df[valid].iloc[[-1]].fillna(0)
+                    rf = self.model.predict(last)[0]
+                    xgb = self.xgb_model.predict(last)[0]
                     if rf == 1 and xgb == 1: score += 2; regime = "TENDENCIA ALCISTA"
                     elif rf == -1 and xgb == -1: score -= 2; regime = "TENDENCIA BAJISTA"
                     else: score = 0; regime = "RANGO"
             except: pass
+
+        # --- FILTRO ADX (TU MEJORA) ---
+        # Si el ADX es bajo (<25), el mercado está muerto. Anulamos señales débiles.
+        if context_filters.get('use_regime') and adx < 25:
+            # Si no es una señal muy fuerte (score alto), la matamos
+            if abs(score) < 3:
+                score = 0
+                details.append("⛔ ADX < 25 (Rango)")
 
         # SEÑAL FINAL
         signal = "NEUTRO"
         if score >= 2: signal = "LONG"
         elif score <= -2: signal = "SHORT"
 
+        # Filtro RSI
         rsi = row.get('RSI', 50)
         if signal == "LONG" and rsi > 75: signal = "NEUTRO"
         if signal == "SHORT" and rsi < 25: signal = "NEUTRO"
 
-        # Estado Visual
+        # Tendencia y Patrones
+        prev_ema20 = prev_row.get('EMA_20', 0); prev_ema50 = prev_row.get('EMA_50', 0)
+        bull_cross = prev_ema20 <= prev_ema50 and ema20 > ema50
+        bear_cross = prev_ema20 >= prev_ema50 and ema20 < ema50
+        
         trend_status = "Estable"
-        if sfp_signal != "Ninguno": trend_status = f"🔥 {sfp_signal}"
+        if bull_cross: trend_status = "🔄 GIRO ALCISTA"
+        elif bear_cross: trend_status = "🔄 GIRO BAJISTA"
         elif "TENDENCIA" in regime: trend_status = "✅ FUERTE"
         elif regime == "RANGO": trend_status = "💤 LATERAL"
+
+        candle_pat = "Sin Patrón"
+        if (prev_row['close'] < prev_row['open']) and (row['close'] > row['open']) and \
+           (row['close'] > prev_row['open']) and (row['open'] < prev_row['close']):
+            candle_pat = "🕯️ Bullish Engulfing"
+        elif (prev_row['close'] > prev_row['open']) and (row['close'] < row['open']) and \
+             (row['close'] < prev_row['open']) and (row['open'] > prev_row['close']):
+            candle_pat = "🕯️ Bearish Engulfing"
         
         atr_val = row.get('ATR', 0)
-        return signal, atr_val, details, regime, trend_status, sfp_signal
+        return signal, atr_val, details, regime, trend_status, candle_pat
 
-    # --- GESTIÓN DINÁMICA DE POSICIÓN (KELLY / VOLATILIDAD) ---
-    def calculate_dynamic_position(self, account_balance, risk_per_trade_pct, entry, sl):
-        """
-        Calcula el tamaño de la posición basado en riesgo fijo (ej: perder max 100$).
-        Wealth Generacional = No perder nunca más de lo planeado.
-        """
-        if entry == 0 or sl == 0: return 0, 1
-        
-        risk_amount = account_balance * (risk_per_trade_pct / 100)
-        distance_per_token = abs(entry - sl)
-        
-        if distance_per_token == 0: return 0, 1
-        
-        # Tamaño en Monedas (ej: 0.5 BTC)
-        position_size_coins = risk_amount / distance_per_token
-        
-        # Tamaño en USDT (Notional)
-        position_size_usdt = position_size_coins * entry
-        
-        # Apalancamiento necesario para cubrir el notional con el balance
-        leverage = position_size_usdt / account_balance
-        
-        # Ajustes de seguridad
-        leverage = max(1, min(leverage, 50)) # Cap 50x
-        return position_size_usdt, int(leverage)
-
-    def check_and_execute_auto(self, db_mgr, symbol, signal, strength, price, atr, account_balance=10000, risk_pct=1.0):
+    def check_and_execute_auto(self, db_mgr, symbol, signal, strength, price, atr, account_size=10000, risk_pct=1.0):
         if strength != "DIAMOND" or signal == "NEUTRO": return False, None
 
         df_trades = db_mgr.load_trades()
@@ -231,39 +218,72 @@ class StrategyManager:
         sl = price - sl_dist if signal == "LONG" else price + sl_dist
         tp1 = price + sl_dist if signal == "LONG" else price - sl_dist
         
-        # --- CÁLCULO DINÁMICO DE TAMAÑO ---
-        pos_size, lev = self.calculate_dynamic_position(account_balance, risk_pct, price, sl)
+        # Cálculo de posición
+        if entry == 0 or sl == 0: return False, None
+        dist_pct = abs(price - sl) / price
+        if dist_pct == 0: return False, None
         
+        risk_amount = account_size * (risk_pct / 100)
+        pos_size_usdt = risk_amount / dist_pct # Tamaño real posición
+        lev = int(pos_size_usdt / account_size)
+        lev = max(1, min(lev, 50))
+
         trade = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "symbol": symbol, "type": signal, "entry": price, "size": pos_size,
+            "symbol": symbol, "type": signal, "entry": price, "size": pos_size_usdt,
             "leverage": lev, "sl": sl, "tp1": tp1, "tp2": 0, "tp3": 0,
-            "status": "OPEN", "pnl": 0.0, "reason": "AUTO-DIAMOND (Risk Managed)", "candles_held": 0, "atr_entry": atr
+            "status": "OPEN", "pnl": 0.0, "reason": "AUTO-DIAMOND", "candles_held": 0, "atr_entry": atr
         }
         db_mgr.add_trade(trade)
         return True, trade
 
     def run_backtest_vectorized(self, df):
+        """
+        BACKTEST MEJORADO (INSTITUCIONAL):
+        - Filtro ADX > 25 (Fuerza)
+        - Filtro MFI (Volumen)
+        - Fees simulados
+        """
         if df is None or df.empty: return 0, 0, 0, 0, 0
+        
         d = df.copy()
         d['signal'] = 0
-        # Backtest con CVD y SFP simplificado
-        # Solo entramos si hay tendencia Y volumen acompañando
-        try:
-            d['trend_ok'] = ((d['EMA_20'] > d['EMA_50']) & (d['close'] > d['VWAP'])).astype(int)
-            # Proxy de volumen: si MFI > 50 es confirmación
-            d.loc[(d['trend_ok'] == 1) & (d['MFI'] > 50), 'signal'] = 1
-            d.loc[(d['EMA_20'] < d['EMA_50']) & (d['close'] < d['VWAP']) & (d['MFI'] < 50), 'signal'] = -1
-        except: pass
+        
+        # Aseguramos columnas
+        if 'ADX_14' not in d.columns: d['ADX_14'] = 0
+        if 'MFI' not in d.columns: d['MFI'] = 50
+        
+        # --- LÓGICA VECTORIZADA ---
+        # LONG: Tendencia + Valor + Fuerza + Volumen
+        d.loc[
+            (d['EMA_20'] > d['EMA_50']) & 
+            (d['close'] > d['VWAP']) & 
+            (d['ADX_14'] > 25), # TU MEJORA
+            'signal'
+        ] = 1
+        
+        # SHORT
+        d.loc[
+            (d['EMA_20'] < d['EMA_50']) & 
+            (d['close'] < d['VWAP']) & 
+            (d['ADX_14'] > 25), # TU MEJORA
+            'signal'
+        ] = -1
         
         d['market_return'] = d['close'].pct_change()
         d['strategy_return'] = d['signal'].shift(1) * d['market_return']
+        
+        # Fees (0.1%)
+        d.loc[d['signal'].diff().abs() > 0, 'strategy_return'] -= 0.001
+        
         total_return = d['strategy_return'].sum()
         trades_count = d['signal'].diff().abs().sum() / 2
         wins = len(d[d['strategy_return'] > 0])
         total = len(d[d['strategy_return'] != 0])
         win_rate = wins / total if total > 0 else 0
+        
         sharpe = d['strategy_return'].mean() / d['strategy_return'].std() * np.sqrt(252) if d['strategy_return'].std() != 0 else 0
         cum_ret = d['strategy_return'].cumsum()
         max_dd = (cum_ret.cummax() - cum_ret).max()
+        
         return total_return, trades_count, win_rate, sharpe, max_dd
