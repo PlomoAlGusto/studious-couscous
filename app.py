@@ -6,7 +6,6 @@ from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timezone
 
-# --- IMPORTACIONES ---
 try:
     from config import config
     from database import TradeManager
@@ -14,20 +13,19 @@ try:
     from strategy import StrategyManager
     from utils import setup_logging, init_nltk, send_telegram_alert
 except ImportError as e:
-    st.error(f"Error crítico: {e}")
-    st.stop()
+    st.error(f"Error: {e}"); st.stop()
 
 st.set_page_config(page_title="Quimera Pro", layout="wide", page_icon="🦁")
 setup_logging()
 init_nltk()
 
-# --- CSS ---
+# --- CSS PRO ---
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; }
     .source-tag { background-color: #21262d; color: #8b949e; padding: 4px 8px; border-radius: 4px; font-size: 11px; border: 1px solid #30363d; font-family: monospace; }
     .symbol-tag { background-color: #1f6feb; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; font-family: monospace; }
-    div.trade-card-box { background-color: #0d1117 !important; border: 1px solid #30363d !important; border-radius: 10px !important; padding: 25px !important; margin-top: 15px !important; margin-bottom: 20px !important; box-shadow: 0 8px 24px rgba(0,0,0,0.6) !important; }
+    div.trade-card-box { background-color: #0d1117 !important; border: 1px solid #30363d !important; border-radius: 10px !important; padding: 25px !important; margin-bottom: 20px !important; box-shadow: 0 8px 24px rgba(0,0,0,0.6) !important; }
     .prob-track { width: 100%; height: 10px; background-color: #21262d; border-radius: 5px; margin: 10px 0 20px 0; overflow: hidden; }
     .price-grid-row { display: flex; justify-content: space-between; margin-bottom: 15px; gap: 10px; }
     .price-col { flex: 1; text-align: center; }
@@ -44,7 +42,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNCIONES ---
 def display_market_sessions():
     now = datetime.now(timezone.utc)
     hour = now.hour
@@ -56,74 +53,59 @@ def display_market_sessions():
         bg = "rgba(50,255,50,0.1)" if is_open else "rgba(255,255,255,0.05)"
         st.sidebar.markdown(f"<div style='font-size:11px; padding:5px; margin-bottom:5px; background:{bg}; border-radius:4px; display:flex; justify-content:space-between;'><span>{name}</span><span>{status}</span></div>", unsafe_allow_html=True)
 
-def calculate_optimal_leverage(entry, sl):
-    if entry == 0: return 1
-    dist_pct = abs(entry - sl) / entry
-    if dist_pct == 0: return 1
-    safe_lev = int(0.02 / dist_pct)
-    return max(1, min(safe_lev, 50))
-
 def calculate_floating_pnl(df_trades, current_price, current_symbol):
     if df_trades.empty: return df_trades
     mask_open = df_trades['status'] == 'OPEN'
     for index, row in df_trades[mask_open].iterrows():
         if row['symbol'] == current_symbol:
-            entry = row['entry']
-            lev = row['leverage']
-            size = row['size']
-            if row['type'] == 'LONG':
-                pnl_pct = ((current_price - entry) / entry) * 100 * lev
-            else:
-                pnl_pct = ((entry - current_price) / entry) * 100 * lev
-            pnl_usdt = (pnl_pct / 100) * size
-            df_trades.at[index, 'pnl'] = pnl_usdt
+            entry = row['entry']; lev = row['leverage']; size = row['size']
+            pnl_pct = ((current_price - entry)/entry)*100*lev if row['type'] == 'LONG' else ((entry - current_price)/entry)*100*lev
+            df_trades.at[index, 'pnl'] = (pnl_pct/100) * size
     return df_trades
 
-def render_trade_card(type, signal_strength, price, sl, tp1, tp2, tp3, lev, prob):
-    if signal_strength == "DIAMOND":
-        header = f"💎 SEÑAL DIAMANTE: {type}"
-        h_color = "#3fb950" if type == "LONG" else "#f85149"
-        bar_color = h_color
-    else:
-        header = f"⚠️ OPORTUNIDAD POTENCIAL: {type}"
-        h_color = "#d29922"
-        bar_color = "#d29922"
-
+def render_trade_card(type, signal_strength, price, sl, tp1, tp2, tp3, lev, prob, pos_size_usdt):
+    h_color = "#3fb950" if type == "LONG" else "#f85149"
+    if signal_strength != "DIAMOND": h_color = "#d29922"
+    header = f"💎 SEÑAL DIAMANTE: {type}" if signal_strength == "DIAMOND" else f"⚠️ OPORTUNIDAD POTENCIAL: {type}"
+    
     html = f"""
-<div class="trade-card-box">
-<div style="text-align:center; font-size:20px; font-weight:bold; color:{h_color}; margin-bottom:5px; letter-spacing:1px; text-transform:uppercase;">{header}</div>
-<div style="display:flex; justify-content:space-between; font-size:12px; color:#8b949e; margin-bottom:5px;"><span>CONFIANZA IA</span><span style="color:{bar_color}; font-weight:bold;">{prob}%</span></div>
-<div class="prob-track"><div style="width:{prob}%; height:100%; background-color:{bar_color}; box-shadow: 0 0 15px {bar_color};"></div></div>
-<div class="price-grid-row">
-<div class="price-col"><div class="t-label">ENTRADA</div><div class="t-val c-blue">${price:,.2f}</div></div>
-<div class="price-col"><div class="t-label">STOP LOSS</div><div class="t-val c-red">${sl:,.2f}</div></div>
-<div class="price-col"><div class="t-label">LEVERAGE</div><div class="t-val c-white">{lev}x</div></div>
-</div>
-<div class="price-grid-row" style="margin-bottom:0;">
-<div class="price-box-dark"><div class="t-label">TP 1</div><div class="t-val c-green">${tp1:,.2f}</div></div>
-<div class="price-box-dark"><div class="t-label">TP 2</div><div class="t-val c-green">${tp2:,.2f}</div></div>
-<div class="price-box-dark"><div class="t-label">TP 3</div><div class="t-val c-green">${tp3:,.2f}</div></div>
-</div>
-</div>
-"""
+    <div class="trade-card-box">
+        <div style="text-align:center; font-size:20px; font-weight:bold; color:{h_color}; margin-bottom:5px; text-transform:uppercase;">{header}</div>
+        <div style="display:flex; justify-content:space-between; font-size:12px; color:#8b949e; margin-bottom:5px;"><span>CONFIANZA IA</span><span style="color:{h_color}; font-weight:bold;">{prob}%</span></div>
+        <div class="prob-track"><div style="width:{prob}%; height:100%; background-color:{h_color}; box-shadow: 0 0 15px {h_color};"></div></div>
+        <div class="price-grid-row">
+            <div class="price-col"><div class="t-label">ENTRADA</div><div class="t-val c-blue">${price:,.2f}</div></div>
+            <div class="price-col"><div class="t-label">STOP LOSS</div><div class="t-val c-red">${sl:,.2f}</div></div>
+            <div class="price-col"><div class="t-label">POS SIZE</div><div class="t-val c-white">${pos_size_usdt:,.0f}</div></div>
+        </div>
+        <div class="price-grid-row" style="margin-bottom:0;">
+            <div class="price-box-dark"><div class="t-label">LEV OPTIMO</div><div class="t-val c-white">{lev}x</div></div>
+            <div class="price-box-dark"><div class="t-label">TP 1</div><div class="t-val c-green">${tp1:,.2f}</div></div>
+            <div class="price-box-dark"><div class="t-label">TP 3</div><div class="t-val c-green">${tp3:,.2f}</div></div>
+        </div>
+    </div>
+    """
     return textwrap.dedent(html)
 
 def render_quimera_ai(regime, atr, fr, fng, rsi, trend_strength, adr_val, tsi_val, mfi_val, trend_status, candle_pat):
     c_reg = "#3fb950" if "TENDENCIA" in regime else "#d29922"
     c_trend = "#a371f7" if "GIRO" in trend_status else "#e6edf3"
+    
+    # Lógica visual para CVD/MFI
+    cvd_txt = "Entrada Institucional" if mfi_val > 60 else "Salida Institucional" if mfi_val < 40 else "Neutro"
+    
     html = f"""
-<div style="margin-bottom:10px; font-weight:bold; color:#a371f7; display:flex; align-items:center; gap:5px; font-size:14px;"><span>🧠 QUIMERA AI ANALYSIS</span></div>
-<div class="ai-box-container">
-<div class="ai-row-item" style="background:rgba(255,255,255,0.03);"><span style="color:#a371f7; font-weight:bold;">⚠️ Tendencia</span><span style="color:{c_trend}; font-weight:bold">{trend_status}</span></div>
-<div class="ai-row-item"><span style="color:#8b949e">🕯️ Patrón Vela</span><span style="color:#e6edf3; font-weight:bold">{candle_pat}</span></div>
-<div class="ai-row-item"><span style="color:#8b949e">🌊 Estructura</span><span style="color:{c_reg}; font-weight:bold">{regime}</span></div>
-<div class="ai-row-item"><span style="color:#8b949e">📊 Fuerza ADX</span><span style="color:#e6edf3; font-weight:bold">{trend_strength}</span></div>
-<div class="ai-row-item"><span style="color:#8b949e">📏 ADR (Rango)</span><span style="color:#e6edf3; font-weight:bold">{adr_val:.2f}%</span></div>
-<div class="ai-row-item"><span style="color:#8b949e">🚀 TSI (Momento)</span><span style="color:#e6edf3; font-weight:bold">{tsi_val:.2f}</span></div>
-<div class="ai-row-item"><span style="color:#8b949e">🌡️ Sentimiento</span><span style="color:#e6edf3; font-weight:bold">{fng}</span></div>
-<div class="ai-row-item"><span style="color:#8b949e">💢 Volatilidad $</span><span style="color:#e6edf3; font-weight:bold">${atr:.2f}</span></div>
-</div>
-"""
+    <div style="margin-bottom:10px; font-weight:bold; color:#a371f7; display:flex; align-items:center; gap:5px; font-size:14px;"><span>🧠 QUIMERA QUANT ANALYSIS</span></div>
+    <div class="ai-box-container">
+        <div class="ai-row-item" style="background:rgba(255,255,255,0.03);"><span style="color:#a371f7; font-weight:bold;">⚠️ Estructura</span><span style="color:{c_trend}; font-weight:bold">{trend_status}</span></div>
+        <div class="ai-row-item"><span style="color:#8b949e">🕯️ Patrón (SFP)</span><span style="color:#e6edf3; font-weight:bold">{candle_pat}</span></div>
+        <div class="ai-row-item"><span style="color:#8b949e">🌊 Régimen</span><span style="color:{c_reg}; font-weight:bold">{regime}</span></div>
+        <div class="ai-row-item"><span style="color:#8b949e">📊 Order Flow</span><span style="color:#e6edf3; font-weight:bold">{cvd_txt} ({mfi_val:.0f})</span></div>
+        <div class="ai-row-item"><span style="color:#8b949e">📏 ADR (Volatilidad)</span><span style="color:#e6edf3; font-weight:bold">{adr_val:.2f}%</span></div>
+        <div class="ai-row-item"><span style="color:#8b949e">🚀 TSI (Momento)</span><span style="color:#e6edf3; font-weight:bold">{tsi_val:.2f}</span></div>
+        <div class="ai-row-item"><span style="color:#8b949e">🌡️ Sentimiento</span><span style="color:#e6edf3; font-weight:bold">{fng}</span></div>
+    </div>
+    """
     return textwrap.dedent(html)
 
 def render_news_box(news):
@@ -136,6 +118,7 @@ def render_news_box(news):
     """
     return textwrap.dedent(html)
 
+# --- SIDEBAR ---
 with st.sidebar:
     st.title("🦁 QUIMERA PRO")
     display_market_sessions()
@@ -154,16 +137,24 @@ with st.sidebar:
             'use_regime': st.checkbox("Filtro ML", True)
         }
     
-    auto_refresh = st.checkbox("🔄 AUTO-SCAN (60s)", False)
+    # NUEVO: GESTIÓN DE RIESGO
     st.markdown("---")
+    st.markdown("### 🛡️ GESTIÓN DE RIESGO")
+    account_size = st.number_input("Capital Cuenta ($)", value=10000.0, step=1000.0)
+    risk_pct = st.slider("Riesgo por Trade (%)", 0.5, 5.0, 1.0, 0.1)
+    
+    auto_refresh = st.checkbox("🔄 AUTO-SCAN (60s)", False)
     enable_auto = st.toggle("🤖 AUTO-TRADE (Todos)", value=False)
+    
     if st.button("🗑️ RESET"): TradeManager().reset_account(); st.rerun()
+    
     st.markdown("---")
     if config.TELEGRAM_TOKEN: st.markdown("<div style='text-align:center;color:#00FF00;border:1px solid green;padding:5px;border-radius:5px;'>🔔 TELEGRAM: ONLINE</div>", unsafe_allow_html=True)
     else: st.markdown("<div style='text-align:center;color:#FF4444;border:1px solid red;padding:5px;border-radius:5px;'>🔕 TELEGRAM: OFFLINE</div>", unsafe_allow_html=True)
 
 if auto_refresh: st_autorefresh(interval=60000)
 
+# --- MAIN ---
 def main():
     data_mgr = DataManager()
     strat_mgr = StrategyManager()
@@ -207,7 +198,8 @@ def main():
                         s_strength = "DIAMOND" if s_sig != "NEUTRO" else "WEAK"
                         scanner_results.append({"Ticker": t, "Señal": s_sig, "Precio": d_df['close'].iloc[-1]})
                         if enable_auto and s_strength == "DIAMOND":
-                            executed, trade_data = strat_mgr.check_and_execute_auto(db_mgr, t, s_sig, s_strength, d_df['close'].iloc[-1], s_atr)
+                            # AUTO-TRADE USANDO GESTIÓN DE RIESGO
+                            executed, trade_data = strat_mgr.check_and_execute_auto(db_mgr, t, s_sig, s_strength, d_df['close'].iloc[-1], s_atr, account_size, risk_pct)
                             if executed and trade_data:
                                 send_telegram_alert(t, f"AUTO: {s_sig}", trade_data['entry'], trade_data['sl'], trade_data['tp1'], trade_data['leverage'])
                                 st.toast(f"💎 Auto-Trade ejecutado en {t}!", icon="🚀")
@@ -245,20 +237,26 @@ def main():
                 st.markdown("<span style='color:#3fb950; font-weight:bold'>🟢 POSICIONES ACTIVAS</span>", unsafe_allow_html=True)
                 st.dataframe(open_trades[['symbol', 'type', 'entry', 'pnl']].style.format({'entry': '{:.2f}', 'pnl': '{:.2f}'}), use_container_width=True)
 
+        # --- CÁLCULOS DINÁMICOS PARA TARJETA ---
         sl_dist = atr * 1.5
         sl = price - sl_dist if display_signal == "LONG" else price + sl_dist
         tp1 = price + sl_dist if display_signal == "LONG" else price - sl_dist
         tp2 = price + (sl_dist * 2) if display_signal == "LONG" else price - (sl_dist * 2)
         tp3 = price + (sl_dist * 3.5) if display_signal == "LONG" else price - (sl_dist * 3.5)
-        opt_lev = calculate_optimal_leverage(price, sl)
+        
+        # GESTIÓN DE RIESGO
+        # Calculamos el tamaño y lev basados en los inputs del sidebar
+        pos_size_usdt, opt_lev = strat_mgr.calculate_dynamic_position(account_size, risk_pct, price, sl)
 
-        st.markdown(render_trade_card(display_signal, signal_strength, price, sl, tp1, tp2, tp3, opt_lev, prob), unsafe_allow_html=True)
+        st.markdown(render_trade_card(display_signal, signal_strength, price, sl, tp1, tp2, tp3, opt_lev, prob, pos_size_usdt), unsafe_allow_html=True)
 
         c_btn1, c_btn2 = st.columns([1, 2])
-        size = c_btn1.number_input("Inversión USDT", value=1000.0)
+        # El botón ahora usa el tamaño calculado dinámicamente, no un input fijo
+        st.info(f"ℹ️ Tamaño Sugerido por Riesgo ({risk_pct}%): ${pos_size_usdt:,.2f}")
+        
         btn_type = "primary" if signal_strength == "DIAMOND" else "secondary"
         if c_btn2.button(f"🚀 EJECUTAR {display_signal}", use_container_width=True, type=btn_type):
-            trade = {"timestamp": str(datetime.now().strftime("%Y-%m-%d %H:%M")), "symbol": symbol, "type": display_signal, "entry": price, "size": size, "leverage": opt_lev, "sl": sl, "tp1": tp1, "tp2": 0, "tp3": 0, "status": "OPEN", "pnl": 0.0, "reason": f"{signal_strength}", "candles_held": 0, "atr_entry": atr}
+            trade = {"timestamp": str(datetime.now().strftime("%Y-%m-%d %H:%M")), "symbol": symbol, "type": display_signal, "entry": price, "size": pos_size_usdt, "leverage": opt_lev, "sl": sl, "tp1": tp1, "tp2": 0, "tp3": 0, "status": "OPEN", "pnl": 0.0, "reason": f"{signal_strength}", "candles_held": 0, "atr_entry": atr}
             db_mgr.add_trade(trade)
             with st.spinner("Notificando..."): send_telegram_alert(symbol, display_signal, price, sl, tp1, opt_lev)
             st.success("✅ Orden Enviada")
@@ -282,13 +280,11 @@ def main():
         st.markdown(render_news_box(news), unsafe_allow_html=True)
 
     st.divider()
-    
     tab_pos, tab_bt, tab_hist = st.tabs(["📊 POSICIONES", "🧪 BACKTEST", "📈 RENDIMIENTO"])
     
     with tab_bt:
         st.markdown("### 🧪 Backtest (ML + Vectorizado)")
         if st.button("Ejecutar Backtest"):
-            # AHORA RECOGEMOS LOS 5 VALORES
             ret, count, wr, sharpe, max_dd = strat_mgr.run_backtest_vectorized(df)
             c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("Retorno", f"{ret:.2%}")
